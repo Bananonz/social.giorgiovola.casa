@@ -80,6 +80,11 @@
 			return;
 		}
 		if (!field('fullName') || !field('username') || (!identity && !field('email'))) return;
+		const emailChanged = !identity && field('email').trim() !== $user?.email;
+		if (emailChanged && !field('currentPassword')) {
+			error = 'Enter your current password to change your email';
+			return;
+		}
 		if (field('password')) {
 			if (field('password') !== field('confirmPassword')) {
 				error = 'Passwords do not match';
@@ -104,7 +109,8 @@
 					username: field('username'),
 					bio: field('bio'),
 					website: field('website'),
-					...(identity ? {} : { email: field('email') })
+					...(identity ? {} : { email: field('email') }),
+					...(emailChanged ? { current_password: field('currentPassword') } : {})
 				}
 			});
 			if (field('password'))
@@ -298,7 +304,7 @@
 				</div>
 				<div class="flex flex-col">
 					<label class="text-[0.8em] opacity-80" for="currentPassword"
-						>Current password (to change it)</label
+						>Current password (to change your email or password)</label
 					>
 					<input
 						class="border-b border-[#ccc] outline-none"

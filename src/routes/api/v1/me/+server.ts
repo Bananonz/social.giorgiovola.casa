@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { fail, readJson, requireUser, v1 } from '#lib/server/api.js';
+import { fail, readJson, requireUser, stringField, v1 } from '#lib/server/api.js';
 import { updateMe } from '#lib/server/login.js';
 import { meOf } from '#lib/server/me.js';
 
@@ -10,7 +10,8 @@ const FIELDS = ['name', 'username', 'bio', 'website', 'email'] as const;
 
 /**
  * Edits the profile in use: any of `name`, `username`, `bio`, `website`, and `email` (accounts
- * only). Fields left out are kept. Bots use PATCH /api/bot/me (or this, without email).
+ * only; a new email also needs `current_password`). Fields left out are kept. Bots use
+ * PATCH /api/bot/me (or this, without email).
  */
 export const PATCH: RequestHandler = v1(async ({ locals, request }) => {
 	const user = requireUser(locals);
@@ -25,6 +26,6 @@ export const PATCH: RequestHandler = v1(async ({ locals, request }) => {
 	if (Object.keys(changes).length === 0)
 		fail(400, `Nothing to update, send any of ${FIELDS.join(', ')}`);
 	if (locals.auth === 'bot' && changes.email !== undefined) fail(400, 'Bots have no email');
-	await updateMe(user, changes);
+	await updateMe(user, changes, stringField(body, 'current_password'));
 	return meOf(locals);
 });

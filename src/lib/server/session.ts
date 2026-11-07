@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
 import type { Cookies } from '@sveltejs/kit';
-import { and, eq, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { db, sessions } from './db/index.js';
+import { closeSessionStreams } from './realtime.js';
 
 /** Token of the session currently in use. */
 export const SESSION_COOKIE = 'social.giorgiovola.casa-token';
@@ -40,11 +41,26 @@ export function setSessionCookies(cookies: Cookies, tokens: string[]) {
 	cookies.set(ACCOUNTS_COOKIE, tokens.join('.'), opts);
 }
 
+/**
+ * Deletes sessions and ends the event streams opened with them: a stream is only authenticated
+ * when it opens, so it would otherwise outlive a revoked session or token. Every deletion of
+ * sessions goes through here. Returns how many were deleted.
+ */
+export async function deleteSessions(where: SQL | undefined) {
+	// `and()` is typed as possibly undefined; a missing filter must never wipe every session
+	if (!where) throw new Error('deleteSessions needs a filter');
+	const deleted = await db.delete(sessions).where(where).returning({ token: sessions.token });
+	closeSessionStreams(deleted.map((d) => d.token));
+	return deleted.length;
+}
+
+/** Signs an account out everywhere (ban, password reset by an admin). */
+export const revokeAllSessions = (accountId: number) =>
+	deleteSessions(eq(sessions.user_id, accountId));
+
 // opportunistic cleanup so expired sessions don't pile up
 const removeExpired = () =>
-	db
-		.delete(sessions)
-		.where(and(isNotNull(sessions.expires_at), lt(sessions.expires_at, sql`NOW()`)));
+	deleteSessions(and(isNotNull(sessions.expires_at), lt(sessions.expires_at, sql`NOW()`)));
 
 const shortAgent = (userAgent: string | null | undefined) => userAgent?.slice(0, 200) || null;
 
@@ -73,7 +89,7 @@ export async function createSession(
 		...signedIn.filter((s) => s.accountId === userId),
 		...others.slice(MAX_SESSIONS - 1)
 	].map((s) => s.token);
-	if (dropped.length > 0) await db.delete(sessions).where(inArray(sessions.token, dropped));
+	if (dropped.length > 0) await deleteSessions(inArray(sessions.token, dropped));
 
 	setSessionCookies(cookies, [
 		created.token,
@@ -123,15 +139,11 @@ export async function createToken(
 
 /** Revokes one session or token of an account by its public id. False when there is none. */
 export async function revokeSession(accountId: number, id: number) {
-	const deleted = await db
-		.delete(sessions)
-		.where(and(eq(sessions.id, id), eq(sessions.user_id, accountId)))
-		.returning({ id: sessions.id });
-	return deleted.length > 0;
+	return (await deleteSessions(and(eq(sessions.id, id), eq(sessions.user_id, accountId)))) > 0;
 }
 
 /** Revokes the session or token behind a request (its primary key). */
-export const revokeSessionKey = (key: string) => db.delete(sessions).where(eq(sessions.token, key));
+export const revokeSessionKey = (key: string) => deleteSessions(eq(sessions.token, key));
 
 /** Every session and token of an account, newest first. Secrets are never part of it. */
 export async function listSessions(accountId: number, currentKey: string | null) {
@@ -163,14 +175,14 @@ export const countPersonalTokens = (accountId: number) =>
 
 /** Signs out every session of an account except `keepKey` (after a password change). */
 export const revokeOtherSessions = (accountId: number, keepKey: string | null) =>
-	db
-		.delete(sessions)
-		.where(and(eq(sessions.user_id, accountId), keepKey ? ne(sessions.token, keepKey) : undefined));
+	deleteSessions(
+		and(eq(sessions.user_id, accountId), keepKey ? ne(sessions.token, keepKey) : undefined)
+	);
 
 /** Signs out the active account; the next signed in account (if any) becomes active. */
 export async function destroySession(cookies: Cookies, signedIn: SessionRef[]) {
 	const token = cookies.get(SESSION_COOKIE);
-	if (token) await db.delete(sessions).where(eq(sessions.token, token));
+	if (token) await deleteSessions(eq(sessions.token, token));
 	setSessionCookies(
 		cookies,
 		signedIn.map((s) => s.token).filter((t) => t !== token)
@@ -180,7 +192,7 @@ export async function destroySession(cookies: Cookies, signedIn: SessionRef[]) {
 /** Signs out every account on this browser. */
 export async function destroyAllSessions(cookies: Cookies) {
 	const tokens = cookieTokens(cookies);
-	if (tokens.length > 0) await db.delete(sessions).where(inArray(sessions.token, tokens));
+	if (tokens.length > 0) await deleteSessions(inArray(sessions.token, tokens));
 	setSessionCookies(cookies, []);
 }
 

@@ -13,4 +13,6 @@ const SSE_HEADERS = {
  * cookie). Anonymous streams get the public events only.
  */
 export const GET: RequestHandler = ({ locals, request }) =>
-	new Response(openStream(locals.user?.id ?? null, request.signal), { headers: SSE_HEADERS });
+	new Response(openStream(locals.user?.id ?? null, locals.sessionKey, request.signal), {
+		headers: SSE_HEADERS
+	});

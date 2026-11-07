@@ -130,7 +130,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | `POST`   | `/api/v1/auth/logout`           | signed in | revoke the token in use                                                      |
 | `GET`    | `/api/v1/auth/sessions`         | account   | browser sessions, app tokens and personal access tokens                      |
 | `DELETE` | `/api/v1/auth/sessions/:id`     | account   | revoke one of them                                                           |
-| `POST`   | `/api/v1/auth/tokens`           | account   | `{ name, expires_in_days? }` → a personal access token (shown once)          |
+| `POST`   | `/api/v1/auth/tokens`           | account   | `{ name, current_password, expires_in_days? }` → a personal access token     |
 | `GET`    | `/api/v1/auth/accounts`         | account   | the account with its identities and unread counts                            |
 | `POST`   | `/api/v1/auth/switch`           | account   | `{ username }`: act as the account or one of its identities                  |
 
@@ -139,7 +139,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | method                    | path                                              | who       |                                                                                       |
 | ------------------------- | ------------------------------------------------- | --------- | ------------------------------------------------------------------------------------- |
 | `GET`                     | `/api/v1/me`                                      | signed in | the profile in use, its account, role, mute state and unread counts                   |
-| `PATCH`                   | `/api/v1/me`                                      | signed in | any of `{ name, username, bio, website, email }`                                      |
+| `PATCH`                   | `/api/v1/me`                                      | signed in | any of `{ name, username, bio, website, email }`; new email: `current_password`       |
 | `PUT` / `DELETE`          | `/api/v1/me/avatar`                               | signed in | set the picture (raw image body) / remove it                                          |
 | `PUT`                     | `/api/v1/me/password`                             | account   | `{ current_password, password }`; signs out every other session                       |
 | `GET`                     | `/api/v1/me/following`                            | signed in | usernames you follow                                                                  |

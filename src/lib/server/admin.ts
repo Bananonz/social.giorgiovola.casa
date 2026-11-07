@@ -15,6 +15,7 @@ import {
 	unmuteAccount
 } from './moderation.js';
 import { validatePassword } from './validation.js';
+import { revokeAllSessions } from './session.js';
 import { MAX_MOTD, setMotd } from './motd.js';
 
 export const ADMIN_FILTERS = ['all', 'banned', 'muted', 'staff'] as const;
@@ -218,7 +219,7 @@ export async function resetPassword(locals: App.Locals, username: string, passwo
 	if (invalid) fail(400, invalid);
 	const { salt, hash } = await hashPassword(password);
 	await db.update(users).set({ password: hash, salt }).where(eq(users.id, target.id));
-	await db.delete(sessions).where(eq(sessions.user_id, target.id));
+	await revokeAllSessions(target.id);
 	return { message: `Password of @${target.username} reset.` };
 }
 

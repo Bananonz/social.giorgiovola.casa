@@ -197,7 +197,8 @@ export async function accountProfile(accountId: number) {
  */
 export async function updateMe(
 	me: User,
-	changes: { name?: string; username?: string; bio?: string; website?: string; email?: string }
+	changes: { name?: string; username?: string; bio?: string; website?: string; email?: string },
+	currentPassword = ''
 ) {
 	const { email, ...profile } = changes;
 	let cleanEmail: string | null = null;
@@ -206,6 +207,11 @@ export async function updateMe(
 		cleanEmail = email.trim();
 		const invalid = validateEmail(cleanEmail);
 		if (invalid) fail(400, invalid);
+		// sending the email unchanged (as the profile form does) needs no password
+		if (cleanEmail === me.email) cleanEmail = null;
+	}
+	if (cleanEmail !== null) {
+		await checkCurrentPassword(me.id, currentPassword);
 		const [taken] = await db
 			.select({ id: users.id })
 			.from(users)
@@ -233,15 +239,12 @@ export async function updateMe(
 }
 
 /**
- * Changes the account's password once the current one checks out, then signs out every other
- * session and token (`keepKey` is the one making the request).
+ * Re-checks the account's password before a sensitive change (a new password or email, a
+ * personal access token), so a stolen session or token alone can't make its access stick.
+ * Wrong guesses are rate limited per account.
  */
-export async function changePassword(
-	accountId: number,
-	current: string,
-	next: string,
-	keepKey: string | null
-) {
+export async function checkCurrentPassword(accountId: number, current: string) {
+	if (!current) fail(400, 'current_password is required for this change');
 	const key = `password:${accountId}`;
 	if (isLimited(key, MAX_FAILS_PER_ACCOUNT)) fail(429, 'Too many attempts, try again later.');
 	const [row] = await db
@@ -253,6 +256,19 @@ export async function changePassword(
 		hit(key, WINDOW_MS);
 		fail(403, 'The current password is wrong.');
 	}
+}
+
+/**
+ * Changes the account's password once the current one checks out, then signs out every other
+ * session and token (`keepKey` is the one making the request).
+ */
+export async function changePassword(
+	accountId: number,
+	current: string,
+	next: string,
+	keepKey: string | null
+) {
+	await checkCurrentPassword(accountId, current);
 	if (next.length > LIMITS.passwordMax || validatePassword(next))
 		fail(400, validatePassword(next)!);
 	const { salt, hash } = await hashPassword(next);

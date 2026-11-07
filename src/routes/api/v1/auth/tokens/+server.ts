@@ -8,14 +8,16 @@ import {
 	stringField,
 	v1
 } from '#lib/server/api.js';
+import { checkCurrentPassword } from '#lib/server/login.js';
 import { MAX_PERSONAL_TOKENS, countPersonalTokens, createToken } from '#lib/server/session.js';
 
 const NAME_MAX = 64;
 const MAX_DAYS = 3650;
 
 /**
- * Creates a personal access token: `{ name, expires_in_days? }` (1 to 3650, or null for a token
- * that never expires; default 90). The token is only in this response.
+ * Creates a personal access token: `{ name, current_password, expires_in_days? }` (1 to 3650, or
+ * null for a token that never expires; default 90). The password is asked again so a stolen
+ * session or token can't mint itself lasting access. The token is only in this response.
  */
 export const POST: RequestHandler = v1(async ({ locals, request }) => {
 	const { accountId } = requireAccount(locals);
@@ -30,6 +32,7 @@ export const POST: RequestHandler = v1(async ({ locals, request }) => {
 		fail(400, `expires_in_days must be a whole number from 1 to ${MAX_DAYS}, or null`);
 
 	rateLimit(`tokens:${accountId}`, 10, 60_000, 'Too many tokens created');
+	await checkCurrentPassword(accountId, stringField(body, 'current_password'));
 	if ((await countPersonalTokens(accountId)) >= MAX_PERSONAL_TOKENS)
 		fail(400, `You can have at most ${MAX_PERSONAL_TOKENS} personal access tokens.`);
 	const { token, id, expires_at } = await createToken(accountId, {

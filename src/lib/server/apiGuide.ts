@@ -91,7 +91,8 @@ password. A login token lasts ${TOKEN_DAYS} days, then requests answer 401 and y
 again. Personal access tokens last what was chosen (or never expire). Any token stops
 working when it is revoked (POST /auth/logout, DELETE /auth/sessions/:id), when the
 account's password changes (every session but the one that changed it), when an admin
-resets the password, or when the account is banned.
+resets the password, or when the account is banned. An event stream (GET /stream) opened
+with it is closed at the same moment.
 
 ### Profiles and identities
 
@@ -263,10 +264,12 @@ GET /auth/sessions                                             account
 DELETE /auth/sessions/:id                                      account
   Revokes one: it is signed out right away. 204, 404 when it isn't yours.
 POST /auth/tokens                                              account
-  Creates a personal access token: { "name": "my script" (1-64),
-  "expires_in_days": 1-3650 | null (never; default 90) }. At most
-  ${MAX_PERSONAL_TOKENS} per account. 201: { "id", "name", "token": "sgu_…",
-  "token_type": "Bearer", "expires_at" }. The token is never shown again.
+  Creates a personal access token: { "name": "my script" (1-64), "current_password"
+  (required: the account's password, asked again so a stolen token can't mint lasting
+  access), "expires_in_days": 1-3650 | null (never; default 90) }. At most
+  ${MAX_PERSONAL_TOKENS} per account, 10 a minute. 201: { "id", "name", "token": "sgu_…",
+  "token_type": "Bearer", "expires_at" }. The token is never shown again. 400 when
+  current_password is missing, 403 when it is wrong (10 tries per 15 minutes).
 
 GET /auth/accounts                                             account
   The account (website: every account signed in on the browser) with its identities:
@@ -284,7 +287,10 @@ GET /me                                                        signed in
 PATCH /me                                                      signed in
   Edits the profile in use. Any of: "name" (1-${LIMITS.name}), "username" (must be free;
   the profile URL changes), "bio" (up to ${LIMITS.bio}, "" clears), "website" (http(s);
-  https:// is added; "" clears), "email" (accounts only). Fields left out are kept. 200: <Me>.
+  https:// is added; "" clears), "email" (accounts only; a different email also needs
+  "current_password", sending the current one unchanged doesn't). Fields left out are
+  kept. 200: <Me>. 400 when current_password is missing for a new email, 403 when it is
+  wrong (10 tries per 15 minutes).
 PUT /me/avatar                                                 signed in
   The raw image as the body (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG, at most 10 MB)
   with its Content-Type, e.g. image/png. Cropped square, re-encoded. 200: { "id", "name",
@@ -492,7 +498,9 @@ GET /stream                           public or signed in
   An event stream (text/event-stream). Send the token in the Authorization header (use an
   SSE client that supports headers; the browser's EventSource can't, which is why the
   website uses its cookie). Reconnect when it drops (the server sends "retry: 3000") and
-  catch up with the normal endpoints. Lines starting with ":" are keep-alives.
+  catch up with the normal endpoints. Lines starting with ":" are keep-alives. The stream
+  ends when the token or session it was opened with is revoked; reconnecting then answers
+  only public events, or 401 for the revoked bearer token.
   Everyone gets:
     post            <Post> (as an anonymous viewer: no liked/regiorged)
     post_edited     <Post>

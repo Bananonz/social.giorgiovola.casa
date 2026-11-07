@@ -559,7 +559,8 @@ export const v1Groups: V1Group[] = [
 				method: 'POST',
 				path: '/api/v1/auth/tokens',
 				auth: 'account',
-				summary: '`{ name, expires_in_days? }` → a personal access token (shown once)'
+				summary:
+					'`{ name, current_password, expires_in_days? }` → a personal access token (shown once)'
 			},
 			{
 				method: 'GET',
@@ -589,7 +590,8 @@ export const v1Groups: V1Group[] = [
 				method: 'PATCH',
 				path: '/api/v1/me',
 				auth: 'signed in',
-				summary: 'any of `{ name, username, bio, website, email }`'
+				summary:
+					'any of `{ name, username, bio, website, email }`; a new email needs `current_password`'
 			},
 			{
 				method: 'PUT / DELETE',

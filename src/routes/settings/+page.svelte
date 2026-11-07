@@ -203,7 +203,11 @@
 		const ok = await run(async () => {
 			created = await api('auth/tokens', {
 				method: 'POST',
-				json: { name: fields.get('name'), expires_in_days: days === 'never' ? null : Number(days) }
+				json: {
+					name: fields.get('name'),
+					current_password: fields.get('currentPassword'),
+					expires_in_days: days === 'never' ? null : Number(days)
+				}
 			});
 		});
 		if (ok && created) {
@@ -546,6 +550,16 @@
 				<option value="365">in a year</option>
 				<option value="never">never</option>
 			</select>
+		</label>
+		<label class="flex flex-col text-[0.8em] opacity-80">
+			Your password
+			<input
+				class="border-b border-line bg-transparent p-2.5 text-[1.25em] outline-none"
+				type="password"
+				name="currentPassword"
+				autocomplete="current-password"
+				required
+			/>
 		</label>
 		<Button class="self-start" type="submit" disabled={busy}>Create token</Button>
 	</form>

@@ -13,7 +13,10 @@ import type { ChatMessage, GroupMessage, MessageReaction, Post } from '#lib/type
 
 type Client = {
 	userId: number | null;
+	/** the session or token (sessions.token) the stream was opened with */
+	sessionKey: string | null;
 	send: (chunk: string) => void;
+	close: () => void;
 };
 
 const clients = new Set<Client>();
@@ -65,13 +68,25 @@ function eventStream(
 }
 
 /** Registers a client; returns the stream body. */
-export function openStream(userId: number | null, signal: AbortSignal) {
-	return eventStream(signal, (send) => {
-		const client: Client = { userId, send };
+export function openStream(userId: number | null, sessionKey: string | null, signal: AbortSignal) {
+	return eventStream(signal, (send, close) => {
+		const client: Client = { userId, sessionKey, send, close };
 		clients.add(client);
 		if (userId !== null) void sendUnreadCount(client);
 		return () => clients.delete(client);
 	});
+}
+
+/**
+ * Ends the streams opened with these sessions or tokens. Like bot tokens, a session is only
+ * checked when its stream opens, so this runs whenever sessions are deleted (sign out, revoke,
+ * password change, ban).
+ */
+export function closeSessionStreams(keys: Iterable<string>) {
+	const set = new Set(keys);
+	if (set.size === 0) return;
+	for (const client of [...clients])
+		if (client.sessionKey !== null && set.has(client.sessionKey)) client.close();
 }
 
 type BotClient = {
