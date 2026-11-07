@@ -231,24 +231,109 @@
 		await invalidate('app:posts');
 	}
 
-	async function toggleLike() {
-		const res = await fetch('/api/posts/like', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				id: post.id
-			})
-		});
+	// bumped on every like, to replay the like button's pop
+	let likePop = $state(0);
+	// only the latest like request's answer counts, older ones may arrive after it
+	let likeSeq = 0;
 
-		if (res.status === 200) {
-			const data = await res.json();
-			liked = data.liked;
-			// absolute count, so it doesn't double up with the realtime `counts` event
-			likes = data.likes;
+	async function setLike(target: boolean) {
+		if (!$user) return goto('/login');
+		if (target === liked) return;
+		// optimistic: the heart and count change right away, and go back if it fails
+		const before = { liked, likes };
+		liked = target;
+		likes = Math.max(0, likes + (target ? 1 : -1));
+		if (target) likePop++;
+		const seq = ++likeSeq;
+		try {
+			const res = await fetch('/api/posts/like', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				// the wanted state, not a toggle: repeated taps can't flip it the wrong way
+				body: JSON.stringify({ id: post.id, liked: target })
+			});
+			if (seq !== likeSeq) return;
+			if (res.ok) {
+				const data = await res.json();
+				liked = data.liked;
+				// absolute count, so it doesn't double up with the realtime `counts` event
+				likes = data.likes;
+			} else {
+				({ liked, likes } = before);
+			}
+		} catch {
+			if (seq === likeSeq) ({ liked, likes } = before);
 		}
 	}
+
+	// double tap a post to like it, on touch screens. a single tap still opens the post (or the
+	// image), just after the double tap window has passed. a mouse keeps its instant clicks and
+	// double click selecting text
+	const DOUBLE_TAP_MS = 280;
+	// how far apart, in px, the two taps can land
+	const DOUBLE_TAP_SLOP = 40;
+	let tapPointer = 'mouse';
+	let lastTap: { t: number; x: number; y: number } | null = null;
+	let pendingTap: ReturnType<typeof setTimeout> | undefined;
+	// the hearts that burst where the post was double tapped
+	let hearts: { id: number; x: number; y: number; tilt: number }[] = $state([]);
+	let heartId = 0;
+	// right after a tap the post can't be selected, so the browser doesn't turn the second tap
+	// of a double tap into a word selection. long pressing to select works as usual otherwise
+	let armed = $state(false);
+	let disarm: ReturnType<typeof setTimeout> | undefined;
+
+	const canDoubleTap = () => !!$user && tapPointer !== 'mouse';
+
+	function tap(e: MouseEvent, single: () => void) {
+		const now = performance.now();
+		const isDouble =
+			!!lastTap &&
+			now - lastTap.t < DOUBLE_TAP_MS &&
+			Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < DOUBLE_TAP_SLOP;
+		// a third quick tap is another double tap: more hearts, never a navigation
+		lastTap = { t: now, x: e.clientX, y: e.clientY };
+		clearTimeout(pendingTap);
+		pendingTap = undefined;
+		armed = true;
+		clearTimeout(disarm);
+		// a little longer than the window, so a slow second tap doesn't select either
+		disarm = setTimeout(() => (armed = false), DOUBLE_TAP_MS + 150);
+		if (isDouble) return doubleTapLike(e);
+		pendingTap = setTimeout(() => {
+			pendingTap = undefined;
+			lastTap = null;
+			single();
+		}, DOUBLE_TAP_MS);
+	}
+
+	function doubleTapLike(e: MouseEvent) {
+		if (postElement) {
+			const rect = postElement.getBoundingClientRect();
+			hearts.push({
+				id: ++heartId,
+				x: e.clientX - rect.left,
+				y: e.clientY - rect.top,
+				tilt: Math.random() * 30 - 15
+			});
+		}
+		// a double tap only ever likes, like everywhere else
+		if (!liked) {
+			navigator.vibrate?.(12);
+			setLike(true);
+		}
+	}
+
+	function openPost() {
+		goto(`/@${post.user.username}/${post.id}`);
+	}
+
+	onMount(() => () => {
+		clearTimeout(pendingTap);
+		clearTimeout(disarm);
+	});
 
 	async function toggleRegiorg() {
 		menuOpen = false;
@@ -630,25 +715,46 @@
 		{/if}
 		<div
 			bind:this={postElement}
-			class="relative flex cursor-pointer gap-2.5 rounded-[5px] p-2.5 [-webkit-tap-highlight-color:transparent] {showThread
+			class="relative flex cursor-pointer touch-manipulation gap-2.5 rounded-[5px] p-2.5 [-webkit-tap-highlight-color:transparent] {armed
+				? 'select-none [-webkit-touch-callout:none]'
+				: ''} {showThread
 				? 'before:absolute before:top-[27.5px] before:-left-5 before:block before:h-1.5 before:w-[21px] before:rounded-bl-[10px] before:border-b before:border-l before:border-accent'
 				: ''} {!isPostOpen && !$isMobile ? 'hover:bg-black' : ''}"
 			tabindex="0"
 			role="button"
 			aria-pressed="false"
-			onkeypress={() => {
-				goto(`/@${post.user.username}/${post.id}`);
-			}}
+			onkeypress={openPost}
+			onpointerdown={(e) => (tapPointer = e.pointerType)}
 			onclick={(e) => {
 				// links inside the post (the quoted post, mentions…) go where they point, and the
 				// poll votes
 				if ((e.target as Element).closest('a, [data-poll]')) return;
-				// allow dragging to select text
-				const selection = getSelection();
-				if (selection && selection.type === 'Range') return;
-				goto(`/@${post.user.username}/${post.id}`);
+				// allow dragging to select text, checked when the tap lands: the second tap of a
+				// double tap may select a word
+				const selecting = () => getSelection()?.type === 'Range';
+				if (!canDoubleTap()) {
+					if (!selecting()) openPost();
+					return;
+				}
+				if (selecting() && !pendingTap) return;
+				tap(e, () => {
+					if (!selecting()) openPost();
+				});
 			}}
 		>
+			{#each hearts as heart (heart.id)}
+				<svg
+					class="double-tap-heart pointer-events-none absolute z-10 size-20 fill-danger"
+					style="left: {heart.x}px; top: {heart.y}px; --tilt: {heart.tilt}deg"
+					viewBox="0 0 24 24"
+					xmlns="http://www.w3.org/2000/svg"
+					aria-hidden="true"
+					onanimationend={() => (hearts = hearts.filter((h) => h.id !== heart.id))}
+					><path
+						d="M2 9.1371C2 14 6.01943 16.5914 8.96173 18.9109C10 19.7294 11 20.5 12 20.5C13 20.5 14 19.7294 15.0383 18.9109C17.9806 16.5914 22 14 22 9.1371C22 4.27416 16.4998 0.825464 12 5.50063C7.50016 0.825464 2 4.27416 2 9.1371Z"
+					/></svg
+				>
+			{/each}
 			<div class="flex self-start" use:profileHover={post.user.username}>
 				<Avatar size={45} user={post.user} />
 			</div>
@@ -712,7 +818,9 @@
 									aria-label="Open image"
 									onclick={(e) => {
 										e.stopPropagation();
-										openImage(gallery, i);
+										// photos are where a double tap is most expected
+										if (canDoubleTap()) tap(e, () => openImage(gallery, i));
+										else openImage(gallery, i);
 									}}
 								>
 									<img
@@ -823,29 +931,37 @@
 						onclick={(e) => {
 							e.preventDefault();
 							e.stopPropagation();
-							toggleLike();
+							setLike(!liked);
 						}}
 						class="group flex cursor-pointer items-center outline-none"
-						title="like"
+						title={liked ? 'Unlike' : 'Like'}
+						aria-label="Like"
+						aria-pressed={liked}
 					>
-						<svg height="20px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"
-							><g id="SVGRepo_bgCarrier" stroke-width="0" /><g
-								id="SVGRepo_tracerCarrier"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-							/><g id="SVGRepo_iconCarrier">
-								<path
-									class={$isMobile
-										? ''
-										: `transition-[fill,stroke] duration-100 ease-in-out ${
-												!liked && $user ? 'group-hover:fill-foreground' : ''
-										  }`}
-									d="M2 9.1371C2 14 6.01943 16.5914 8.96173 18.9109C10 19.7294 11 20.5 12 20.5C13 20.5 14 19.7294 15.0383 18.9109C17.9806 16.5914 22 14 22 9.1371C22 4.27416 16.4998 0.825464 12 5.50063C7.50016 0.825464 2 4.27416 2 9.1371Z"
-									fill={liked ? '#bb5353' : 'transparent'}
-									stroke={liked ? '#bb5353' : '#d9d9d9'}
-								/>
-							</g></svg
-						>
+						{#key likePop}
+							<svg
+								class={likePop ? 'like-pop' : ''}
+								height="20px"
+								viewBox="0 0 24 24"
+								xmlns="http://www.w3.org/2000/svg"
+								><g id="SVGRepo_bgCarrier" stroke-width="0" /><g
+									id="SVGRepo_tracerCarrier"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+								/><g id="SVGRepo_iconCarrier">
+									<path
+										class={$isMobile
+											? ''
+											: `transition-[fill,stroke] duration-100 ease-in-out ${
+													!liked && $user ? 'group-hover:fill-foreground' : ''
+											  }`}
+										d="M2 9.1371C2 14 6.01943 16.5914 8.96173 18.9109C10 19.7294 11 20.5 12 20.5C13 20.5 14 19.7294 15.0383 18.9109C17.9806 16.5914 22 14 22 9.1371C22 4.27416 16.4998 0.825464 12 5.50063C7.50016 0.825464 2 4.27416 2 9.1371Z"
+										fill={liked ? '#bb5353' : 'transparent'}
+										stroke={liked ? '#bb5353' : '#d9d9d9'}
+									/>
+								</g></svg
+							>
+						{/key}
 					</button>
 					<div class="cursor-pointer hover:underline">
 						<div
@@ -1100,3 +1216,75 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	/* the heart a double tap leaves where it landed: pops in, settles, then floats away */
+	.double-tap-heart {
+		transform: translate(-50%, -50%) rotate(var(--tilt)) scale(0);
+		animation: heart-burst 850ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+	}
+
+	@keyframes heart-burst {
+		0% {
+			opacity: 0;
+			transform: translate(-50%, -50%) rotate(var(--tilt)) scale(0.2);
+		}
+		15% {
+			opacity: 1;
+			transform: translate(-50%, -50%) rotate(var(--tilt)) scale(1.2);
+		}
+		28% {
+			transform: translate(-50%, -50%) rotate(var(--tilt)) scale(0.92);
+		}
+		40%,
+		65% {
+			opacity: 1;
+			transform: translate(-50%, -50%) rotate(var(--tilt)) scale(1);
+		}
+		100% {
+			opacity: 0;
+			transform: translate(-50%, -140%) rotate(var(--tilt)) scale(0.75);
+		}
+	}
+
+	/* the like button bounces when the post gets liked */
+	.like-pop {
+		animation: like-pop 380ms cubic-bezier(0.2, 0.9, 0.3, 1.4);
+	}
+
+	@keyframes like-pop {
+		0% {
+			transform: scale(1);
+		}
+		35% {
+			transform: scale(1.35);
+		}
+		70% {
+			transform: scale(0.9);
+		}
+		100% {
+			transform: scale(1);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.double-tap-heart {
+			transform: translate(-50%, -50%);
+			animation: heart-fade 700ms ease-out forwards;
+		}
+
+		.like-pop {
+			animation: none;
+		}
+
+		@keyframes heart-fade {
+			0%,
+			60% {
+				opacity: 1;
+			}
+			100% {
+				opacity: 0;
+			}
+		}
+	}
+</style>
