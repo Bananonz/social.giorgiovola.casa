@@ -7,22 +7,21 @@
 	import Avatar from './Avatar.svelte';
 	import LoadingScreen from './LoadingScreen.svelte';
 	import { user } from '#lib/store.js';
+	import { page } from '$app/state';
 
 	type Props = {
 		/** Set to reply to a post instead of creating a top level one. */
 		replyTo?: number | null;
 		/** Set to quote a post (a quote regiorg): it is shown under the input. */
 		quoteOf?: QuotedPost | null;
+		/** Defaults to the message of the day set by the admins. */
 		placeholder?: string;
 		oncreated?: (post: Post) => void;
 	};
 
-	let {
-		replyTo = null,
-		quoteOf = null,
-		placeholder = 'twitter sucks',
-		oncreated
-	}: Props = $props();
+	let { replyTo = null, quoteOf = null, placeholder: placeholderProp, oncreated }: Props = $props();
+
+	const placeholder = $derived(placeholderProp ?? page.data.motd ?? '');
 
 	const MAX_IMAGES = 5;
 	const MAX_BYTES = 10 * 1024 * 1024;

@@ -73,6 +73,29 @@
 		<p class="rounded-[5px] bg-accent p-[5px] text-background">{form.message}</p>
 	{/if}
 
+	{#if data.motd !== null}
+		<form class="flex flex-col gap-2.5" method="POST" action="?/motd" use:enhance>
+			<label class="flex flex-col" for="motd">
+				<span class="text-[0.8em] opacity-80">Message of the day</span>
+				<span class={hintClass}>
+					Shown in the post composer. Leave it empty for the default ("{data.defaultMotd}").
+				</span>
+			</label>
+			<div class="flex flex-wrap gap-2.5">
+				<input
+					id="motd"
+					class="input min-w-0 flex-1"
+					type="text"
+					name="motd"
+					placeholder={data.defaultMotd}
+					maxlength={data.maxMotd}
+					value={data.motd}
+				/>
+				<Button type="submit">Save</Button>
+			</div>
+		</form>
+	{/if}
+
 	<form method="GET" class="flex flex-wrap gap-2.5">
 		<input
 			class="input min-w-0 flex-1"

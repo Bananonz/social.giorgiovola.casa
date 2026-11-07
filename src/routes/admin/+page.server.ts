@@ -17,6 +17,7 @@ import {
 	type ModerationTarget
 } from '#lib/server/moderation.js';
 import { validatePassword } from '#lib/server/validation.js';
+import { DEFAULT_MOTD, MAX_MOTD, getMotd, setMotd } from '#lib/server/motd.js';
 
 const PAGE_SIZE = 25;
 const MAX_PAGE = 10_000;
@@ -81,6 +82,10 @@ export const load = (async ({ locals, url }) => {
 	const admin = locals.role === 'admin';
 	return {
 		role: locals.role,
+		// only admins change it, the default is shown as an empty field
+		motd: admin ? await getMotd().then((m) => (m === DEFAULT_MOTD ? '' : m)) : null,
+		defaultMotd: DEFAULT_MOTD,
+		maxMotd: MAX_MOTD,
 		q,
 		filter,
 		page,
@@ -199,6 +204,20 @@ async function authorize(
 }
 
 export const actions = {
+	/** Sets the message of the day shown in the post composer. */
+	motd: async ({ locals, request }) => {
+		if (!locals.user || locals.role !== 'admin') return fail(403, { error: 'Forbidden.' });
+		if (actionsLimited(locals.user.id)) return fail(429, { error: 'Too many actions, slow down.' });
+		const motd = (await request.formData()).get('motd');
+		if (typeof motd !== 'string') return fail(400, { error: 'Missing message.' });
+		// one line: it is an input placeholder
+		const clean = motd.replace(/\s+/g, ' ').trim();
+		if (clean.length > MAX_MOTD)
+			return fail(400, { error: `The message can be at most ${MAX_MOTD} characters.` });
+		await setMotd(clean);
+		return { message: clean ? 'Message of the day updated.' : 'Message of the day reset.' };
+	},
+
 	ban: async ({ locals, request }) => {
 		const auth = await authorize(locals, request);
 		if (auth.denied) return auth.denied;
