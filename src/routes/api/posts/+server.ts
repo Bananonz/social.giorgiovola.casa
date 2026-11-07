@@ -13,6 +13,7 @@ import {
 	toWebp
 } from '#lib/server/images.js';
 import { actionsLimited, mutedMessage, canDeletePostOf } from '#lib/server/moderation.js';
+import { checkStaged, claimStaged, parseStagedIds } from '#lib/server/stagedUploads.js';
 
 async function readJson(request: Request): Promise<Record<string, unknown> | null> {
 	try {
@@ -41,6 +42,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		}
 		body = {
 			content: form.get('content'),
+			// ids of images uploaded beforehand (api/uploads), attached after `images`
+			uploads: form.getAll('uploads'),
 			reply_to: form.get('reply_to') || null,
 			quote_of: form.get('quote_of') || null,
 			poll: form.has('poll_options')
@@ -53,8 +56,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		if (!body) return new Response('Invalid JSON', { status: 400 });
 	}
 
+	const staged = parseStagedIds(body.uploads);
+	if (staged instanceof Response) return staged;
 	const content = typeof body.content === 'string' ? body.content.trim() : '';
-	if (!content && files.length === 0) {
+	if (!content && files.length === 0 && staged.length === 0) {
 		return new Response('Missing content', { status: 400 });
 	}
 	if (content.length > LIMITS.postContent) {
@@ -66,7 +71,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	);
 	if ('error' in poll) return new Response(poll.error, { status: 400 });
 	if (poll.poll && !content) return new Response('A poll needs a question', { status: 400 });
-	if (files.length > LIMITS.postImages) {
+	if (files.length + staged.length > LIMITS.postImages) {
 		return new Response(`Posts can have at most ${LIMITS.postImages} images`, { status: 400 });
 	}
 
@@ -97,6 +102,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return new Response('Invalid quote_of', { status: 400 });
 	const refError = await checkPostRefs(reply_to, quote_of);
 	if (refError) return new Response(refError.message, { status: refError.status });
+	const stagedMissing = checkStaged(locals.user.id, staged);
+	if (stagedMissing) return stagedMissing;
 
 	let optimized: Buffer[];
 	try {
@@ -107,7 +114,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		if (e instanceof ImageError) return new Response(e.message, { status: 400 });
 		throw e;
 	}
-	const images = await Promise.all(optimized.map(saveUpload));
+	const saved = await Promise.all(optimized.map(saveUpload));
+	const claimed = await claimStaged(locals.user.id, staged);
+	if (claimed instanceof Response) {
+		await removeUploads(saved);
+		return claimed;
+	}
+	const images = [...saved, ...claimed];
 
 	let post;
 	try {

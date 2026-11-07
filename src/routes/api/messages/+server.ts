@@ -15,6 +15,7 @@ import { removeUploads } from '#lib/server/images.js';
 import {
 	checkMessage,
 	countMessage,
+	hasImages,
 	messageLimited,
 	readMessageBody,
 	readReplyTo,
@@ -57,10 +58,10 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 	const body = await readMessageBody(request);
 	if (body instanceof Response) return body;
-	const hasImages = body.files.length > 0;
-	const limited = messageLimited(locals.user.id, hasImages);
+	const withImages = hasImages(body);
+	const limited = messageLimited(locals.user.id, withImages);
 	if (limited) return limited;
-	const invalid = checkMessage(body);
+	const invalid = checkMessage(body, locals.user.id);
 	if (invalid) return invalid;
 	const replyTo = readReplyTo(body.fields);
 	if (replyTo instanceof Response) return replyTo;
@@ -78,8 +79,8 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		return new Response('The message you are replying to is gone', { status: 400 });
 	}
 
-	countMessage(locals.user.id, hasImages);
-	const images = await saveMessageImages(body.files);
+	countMessage(locals.user.id, withImages);
+	const images = await saveMessageImages(body, locals.user.id);
 	if (images instanceof Response) return images;
 
 	let message;
