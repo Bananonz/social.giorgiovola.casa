@@ -1,6 +1,6 @@
 import type { Handle } from '@sveltejs/kit/hooks';
 import { CORS_HEADERS, PREFLIGHT_HEADERS, apiError } from '#lib/server/api.js';
-import { authenticate } from '#lib/server/auth.js';
+import { authenticate, shareAuth } from '#lib/server/auth.js';
 import { PUBLIC_URL } from '$app/env/public';
 
 const securityHeaders: Record<string, string> = {
@@ -26,7 +26,7 @@ export const handle = (async ({ event, resolve }) => {
 
 	let response = await authenticate(event);
 	if (!response) {
-		response = await resolve(event);
+		response = await shareAuth(event.locals, () => resolve(event));
 		// unknown routes and methods under /api/v1 answer with the API's error shape too
 		if (
 			api &&

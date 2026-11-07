@@ -144,7 +144,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | `PUT`                     | `/api/v1/me/password`                             | account   | `{ current_password, password }`; signs out every other session                       |
 | `GET`                     | `/api/v1/me/following`                            | signed in | usernames you follow                                                                  |
 | `GET`                     | `/api/v1/me/passkeys`                             | account   | your passkeys                                                                         |
-| `POST`                    | `/api/v1/me/passkeys/options`                     | account   | start registering a passkey                                                           |
+| `POST`                    | `/api/v1/me/passkeys/options`                     | account   | `{ current_password }`: start registering a passkey                                   |
 | `POST`                    | `/api/v1/me/passkeys`                             | account   | `{ challenge_id, name?, response }`: finish registering it                            |
 | `PATCH` / `DELETE`        | `/api/v1/me/passkeys/:id`                         | account   | rename `{ name }` / delete a passkey                                                  |
 | `GET` / `POST`            | `/api/v1/me/identities`                           | account   | your identities and the ones shared with you / create one `{ name, username }`        |
@@ -206,7 +206,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | method           | path                                                    | who                   |                                                                                       |
 | ---------------- | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
 | `GET`            | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
-| `GET`            | `/api/v1/conversations/recent`                          | signed in             | where a post can be shared                                                            |
+| `GET`            | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
 | `GET`            | `/api/v1/conversations/:username`                       | signed in             | peer, blocks and mute state                                                           |
 | `GET` / `POST`   | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
 | `DELETE`         | `/api/v1/conversations/:username/messages/:id`          | sender                | delete your message                                                                   |

@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { fail, readJson, requireUser, stringField, v1 } from '#lib/server/api.js';
+import { fail, rateLimit, readJson, requireUser, stringField, v1 } from '#lib/server/api.js';
 import { MAX_PROFILE_UPDATES, PROFILE_WINDOW_MS, botLimited } from '#lib/server/bots.js';
 import { updateMe } from '#lib/server/login.js';
 import { closeBotStreams } from '#lib/server/realtime.js';
@@ -7,6 +7,9 @@ import { meOf } from '#lib/server/me.js';
 
 /** The profile in use, the account behind it, moderation state and unread counts. */
 export const GET: RequestHandler = v1(({ locals }) => meOf(locals));
+
+// people edit by hand; this only stops scripts churning usernames
+const MAX_PERSON_UPDATES = 30;
 
 const FIELDS = ['name', 'username', 'bio', 'website', 'email'] as const;
 
@@ -36,6 +39,13 @@ export const PATCH: RequestHandler = v1(async ({ locals, request }) => {
 		fail(429, 'Updating the profile too often', {
 			'Retry-After': String(PROFILE_WINDOW_MS / 1000)
 		});
+	if (locals.auth !== 'bot')
+		rateLimit(
+			`profile:${user.id}`,
+			MAX_PERSON_UPDATES,
+			PROFILE_WINDOW_MS,
+			'Updating the profile too often'
+		);
 	const updated = await updateMe(user, changes, stringField(body, 'current_password'));
 	// a bot stream matches mentions against the username it was opened with
 	if (locals.auth === 'bot' && updated.username !== user.username) closeBotStreams([user.id]);

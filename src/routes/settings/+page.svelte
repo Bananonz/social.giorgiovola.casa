@@ -75,12 +75,14 @@
 	async function addPasskey(e: SubmitEvent) {
 		e.preventDefault();
 		if (busy) return;
+		const form = e.currentTarget as HTMLFormElement;
+		const current_password = new FormData(form).get('currentPassword');
 		busy = true;
 		error = '';
 		try {
 			const { challenge_id, ...optionsJSON } = await api<
 				Parameters<typeof startRegistration>[0]['optionsJSON'] & { challenge_id: string }
-			>('me/passkeys/options', { method: 'POST' });
+			>('me/passkeys/options', { method: 'POST', json: { current_password } });
 			let response;
 			try {
 				response = await startRegistration({ optionsJSON });
@@ -99,6 +101,7 @@
 				json: { challenge_id, name: newName, response }
 			});
 			newName = '';
+			form.reset();
 			await invalidateAll();
 		} catch (err) {
 			error = messageOf(err, 'Something went wrong, try again.');
@@ -314,6 +317,15 @@
 				placeholder="Name (e.g. My phone)"
 				maxlength="64"
 				aria-label="Passkey name"
+			/>
+			<input
+				class="input"
+				type="password"
+				name="currentPassword"
+				autocomplete="current-password"
+				placeholder="Your password"
+				aria-label="Your password"
+				required
 			/>
 			<Button class="self-start" type="submit" disabled={busy}>
 				{busy ? 'Waiting for your device…' : 'Add passkey'}

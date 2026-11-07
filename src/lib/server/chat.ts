@@ -152,9 +152,28 @@ export async function conversationMessages(me: User, username: string, before: n
 	return threadPage(await getThread(me, peer, before));
 }
 
-/** Sends a direct message: JSON `{ content, uploads?, reply_to? }` or multipart with `images`. */
-export async function sendDirect(me: User, username: string, request: Request) {
+// the bot API's message limit and bucket (see botLimited), so bots can't get more by using v1
+const MAX_BOT_MESSAGES = 20;
+
+/**
+ * Reads a message body. Bots send text only, like in the bot API, and count against its
+ * message limit (before the body is read).
+ */
+async function readMessage(locals: App.Locals, me: User, request: Request) {
+	const bot = locals.auth === 'bot';
+	if (bot) {
+		if (request.headers.get('content-type')?.startsWith('multipart/form-data'))
+			fail(403, "Bots can't attach images, send JSON");
+		rateLimit(`bot:${me.id}:messages`, MAX_BOT_MESSAGES, 60_000, 'Messaging too fast');
+	}
 	const body = thrown(await readMessageBody(request));
+	if (bot && hasImages(body)) fail(403, "Bots can't attach images");
+	return body;
+}
+
+/** Sends a direct message: JSON `{ content, uploads?, reply_to? }` or multipart with `images`. */
+export async function sendDirect(locals: App.Locals, me: User, username: string, request: Request) {
+	const body = await readMessage(locals, me, request);
 	const withImages = hasImages(body);
 	thrown(messageLimited(me.id, withImages));
 	thrown(checkMessage(body, me.id));
@@ -285,8 +304,13 @@ export async function groupMessages(me: User, id: number | null, before: number 
 }
 
 /** Sends a message to the group: JSON `{ content, uploads?, reply_to? }` or multipart. */
-export async function sendToGroup(me: User, id: number | null, request: Request) {
-	const body = thrown(await readMessageBody(request));
+export async function sendToGroup(
+	locals: App.Locals,
+	me: User,
+	id: number | null,
+	request: Request
+) {
+	const body = await readMessage(locals, me, request);
 	const withImages = hasImages(body);
 	thrown(messageLimited(me.id, withImages));
 	thrown(checkMessage(body, me.id));

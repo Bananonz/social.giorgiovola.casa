@@ -22,5 +22,5 @@ export const GET: RequestHandler = v1(({ locals, params, url }) =>
  * or multipart with `content`, `images` files and `reply_to` for browsers.
  */
 export const POST: RequestHandler = v1(async ({ locals, params, request }) =>
-	created(await sendDirect(requireUnmuted(locals), usernameParam(params.username), request))
+	created(await sendDirect(locals, requireUnmuted(locals), usernameParam(params.username), request))
 );

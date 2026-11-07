@@ -82,9 +82,11 @@ Three kinds of token exist:
   sgc_…  a bot token (see Part 2 for what bots are). Bots can use v1 too: they act as their
          own profile. Account endpoints (sessions, tokens, passkeys, password, identities,
          bots, admin, push) answer 403 for bots. Bots keep the bot API's limits in v1: they
-         can't create, rename or add people to groups, remove others from one, or upload
-         images (403), post at most 20 a minute, and get 10 profile edits an hour
-         (name, username, bio, website, picture); 429 beyond that.
+         can't create, rename or add people to groups, remove others from one, upload
+         images or attach them to posts and messages (403), post at most 20 a minute and
+         send at most 20 messages a minute (these limits are shared with the bot API, not
+         added to it), and get 10 profile edits an hour (name, username, bio, website,
+         picture); 429 beyond that.
 Without a token you are anonymous: public reads work (posts, profiles, timelines), the rest
 answers 401. The website uses a session cookie instead; cookies only work on the website's
 own origin and never from other sites.
@@ -283,7 +285,7 @@ POST /auth/switch                                              account
   { "username": "the account, or one of its identities, or one shared with it" }
   Every later request with this token acts as that profile, and its open /stream is closed
   (reconnect). 200: <Me>. 403 when you can't
-  use that profile, 404 unknown username.
+  use that profile, 404 unknown username. 30 switches a minute.
 
 ### You
 
@@ -295,7 +297,7 @@ PATCH /me                                                      signed in
   https:// is added; "" clears), "email" (accounts only; a different email also needs
   "current_password", sending the current one unchanged doesn't). Fields left out are
   kept. 200: <Me>. 400 when current_password is missing for a new email, 403 when it is
-  wrong (10 tries per 15 minutes).
+  wrong (10 tries per 15 minutes). 30 edits an hour per profile (bots: 10).
 PUT /me/avatar                                                 signed in
   The raw image as the body (PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG, at most 10 MB)
   with its Content-Type, e.g. image/png. Cropped square, re-encoded. 200: { "id", "name",
@@ -312,7 +314,9 @@ GET /me/passkeys                                               account
   { "items": [ { "id", "name", "backed_up", "created_at", "last_used_at" } ],
     "max": ${MAX_PASSKEYS}, "rp_id", "user_handle" }
 POST /me/passkeys/options                                      account
-  Starts registering a passkey: WebAuthn creation options plus "challenge_id".
+  { "current_password" }. Starts registering a passkey: WebAuthn creation options plus
+  "challenge_id". 400 when current_password is missing, 403 when it is wrong (10 tries per
+  15 minutes).
 POST /me/passkeys                                              account
   { "challenge_id", "name": "My phone" (optional, max 64), "response": <attestation JSON> }
   201: { "id", "name" }.
@@ -373,6 +377,7 @@ POST /posts                                                    signed in, not mu
 GET /posts/:id                                                 public
 PATCH /posts/:id   { "content" }                                author, not muted
   Edits the text (images and poll stay). Sets "edited_at", re-reads hashtags. 200: <Post>.
+  400 when the text would be empty on a post without images, or on a poll (its question).
 DELETE /posts/:id                                              author (or staff)
   Deletes it with its replies. 204.
 GET /posts/:id/replies          replies, ratioing ones first then oldest first; limit up to 200 (default 50)
@@ -427,9 +432,9 @@ POST /notifications/:id/read          marks one read → 204
 ### Direct messages
 
 GET /conversations                    signed in → { "direct": [..], "groups": [..] }
-GET /conversations/recent             signed in → { "recent": [ { "kind": "user", "peer":
+GET /share-targets                    signed in → { "recent": [ { "kind": "user", "peer":
   User } | { "kind": "group", "group": {...} } ], "groups": [...] } (to share a post)
-GET /conversations/:username          signed in ("recent" is a reserved username) → { "peer": User, "block": { "me": you
+GET /conversations/:username          signed in → { "peer": User, "block": { "me": you
   blocked them, "peer": they blocked you }, "muted": false }
 GET /conversations/:username/messages signed in
   30 messages, OLDEST FIRST: the latest ones. For older history pass

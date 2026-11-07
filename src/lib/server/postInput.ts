@@ -2,7 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { User } from '#lib/types.js';
 import { extractHashtags } from '#lib/hashtags.js';
-import { db, post_hashtags, posts, users } from './db/index.js';
+import { db, polls, post_hashtags, posts, users } from './db/index.js';
 import { ApiError, fail } from './api.js';
 import { checkPostRefs, createPost, deletePost, getPosts } from './posts.js';
 import { LIMITS, parseId, parsePoll } from './validation.js';
@@ -26,8 +26,10 @@ type RawPost = { body: Record<string, unknown>; files: File[] };
  * The body of a new post: JSON (`uploads` are ids from POST /api/v1/uploads), or multipart with
  * `images` files for browsers. A poll is `{ options, duration_minutes }` (`minutes` too).
  */
-export async function readPostBody(request: Request): Promise<RawPost> {
+export async function readPostBody(request: Request, locals: App.Locals): Promise<RawPost> {
 	if (request.headers.get('content-type')?.startsWith('multipart/form-data')) {
+		// multipart is for image files, and bots can't attach images (like in the bot API)
+		if (locals.auth === 'bot') fail(403, "Bots can't attach images, send JSON");
 		let form: FormData;
 		try {
 			form = await request.formData();
@@ -137,12 +139,15 @@ export async function submitPost(
  */
 export async function editPost(user: Pick<User, 'id'>, postId: number, rawContent: string) {
 	const [post] = await db
-		.select({ user_id: posts.user_id, images: posts.images })
+		.select({ user_id: posts.user_id, images: posts.images, poll: polls.post_id })
 		.from(posts)
+		.leftJoin(polls, eq(polls.post_id, posts.id))
 		.where(eq(posts.id, postId));
 	if (!post) fail(404, 'Post not found');
 	if (post.user_id !== user.id) fail(403, 'You can only edit your own posts');
 	const content = rawContent.trim();
+	// the same rules as a new post: the text of a poll is its question
+	if (!content && post.poll !== null) fail(400, 'A poll needs a question');
 	if (!content && post.images.length === 0) fail(400, 'Missing content');
 	if (content.length > LIMITS.postContent)
 		fail(400, `Posts can be at most ${LIMITS.postContent} characters`);

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type { Cookies } from '@sveltejs/kit';
-import { and, eq, inArray, isNotNull, lt, ne, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { db, sessions } from './db/index.js';
 import { closeSessionStreams } from './realtime.js';
 
@@ -170,8 +170,16 @@ export async function listSessions(accountId: number, currentKey: string | null)
 }
 
 /** How many personal access tokens an account has. */
+/** Live personal tokens: expired ones don't count against the cap (createToken deletes them). */
 export const countPersonalTokens = (accountId: number) =>
-	db.$count(sessions, and(eq(sessions.user_id, accountId), eq(sessions.kind, 'personal')));
+	db.$count(
+		sessions,
+		and(
+			eq(sessions.user_id, accountId),
+			eq(sessions.kind, 'personal'),
+			or(isNull(sessions.expires_at), gt(sessions.expires_at, sql`NOW()`))
+		)
+	);
 
 /** Signs out every session of an account except `keepKey` (after a password change). */
 export const revokeOtherSessions = (accountId: number, keepKey: string | null) =>

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { RequestEvent } from '@sveltejs/kit';
 import { and, eq, exists, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -24,6 +25,21 @@ function anonymous(locals: App.Locals) {
 	locals.muteReason = null;
 	locals.auth = 'anonymous';
 	locals.sessionKey = null;
+}
+
+/**
+ * During SSR, page loads call /api/v1 through `event.fetch`, which runs each endpoint in-process
+ * with the page's cookies. Those subrequests reuse the page request's resolved session instead
+ * of looking it up (and touching last_used_at) again: `cookieKeys` remembers which cookies a
+ * request was authenticated from, and `shareAuth` makes it visible to the requests it spawns.
+ */
+const cookieKeys = new WeakMap<App.Locals, string>();
+const parentAuth = new AsyncLocalStorage<{ key: string; locals: App.Locals }>();
+
+/** Runs `fn` (the rest of the request) so its in-process subrequests can reuse its session. */
+export function shareAuth<T>(locals: App.Locals, fn: () => T): T {
+	const key = cookieKeys.get(locals);
+	return key === undefined ? fn() : parentAuth.run({ key, locals }, fn);
 }
 
 /** Writes at most one last_used_at every few minutes per session. */
@@ -191,7 +207,16 @@ export async function authenticate(event: RequestEvent): Promise<Response | null
 
 	const tokens = cookieTokens(cookies);
 	if (tokens.length === 0) return null;
+	const key = tokens.join(' ');
+	const parent = parentAuth.getStore();
+	// a subrequest of a page with the same cookies: the page already resolved them
+	if (parent?.key === key) {
+		Object.assign(locals, parent.locals, { sessions: [...parent.locals.sessions] });
+		cookieKeys.set(locals, key);
+		return null;
+	}
 	const valid = await loadSessions(tokens, 'cookie');
+	cookieKeys.set(locals, key);
 
 	// the active session expired (or a token went stale): fall back to the next signed in account
 	if (valid.length !== tokens.length)

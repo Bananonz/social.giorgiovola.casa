@@ -616,7 +616,7 @@ export const v1Groups: V1Group[] = [
 				method: 'POST',
 				path: '/api/v1/me/passkeys/options',
 				auth: 'account',
-				summary: 'start registering a passkey'
+				summary: '`{ current_password }`: start registering a passkey'
 			},
 			{
 				method: 'POST',
@@ -905,7 +905,7 @@ export const v1Groups: V1Group[] = [
 			},
 			{
 				method: 'GET',
-				path: '/api/v1/conversations/recent',
+				path: '/api/v1/share-targets',
 				auth: 'signed in',
 				summary: 'where a post can be shared'
 			},

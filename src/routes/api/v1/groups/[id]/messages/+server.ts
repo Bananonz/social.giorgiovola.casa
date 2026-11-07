@@ -13,5 +13,5 @@ export const GET: RequestHandler = v1(({ locals, params, url }) =>
 
 /** Sends a message: JSON `{ content, uploads?, reply_to? }`, or multipart with `images`. */
 export const POST: RequestHandler = v1(async ({ locals, params, request }) =>
-	created(await sendToGroup(requireUnmuted(locals), parseId(params.id), request))
+	created(await sendToGroup(locals, requireUnmuted(locals), parseId(params.id), request))
 );

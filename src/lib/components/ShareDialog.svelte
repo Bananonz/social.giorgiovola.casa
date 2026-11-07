@@ -71,7 +71,7 @@
 	async function loadRecent() {
 		loadingRecent = true;
 		try {
-			const res = await fetch('/api/v1/conversations/recent');
+			const res = await fetch('/api/v1/share-targets');
 			if (res.ok) ({ recent, groups } = await res.json());
 		} catch {
 			// the search still works without them
