@@ -187,11 +187,14 @@
 		gesture = null;
 		interacting = false;
 
+		// read the swipe before reset() zeroes it
+		const swipeX = sx;
+		const swipeY = sy;
 		if (scale < 1.01) reset();
 
 		if (wasPan && !zoomed && e.type === 'pointerup') {
-			if (multiple && Math.abs(sx) > 60) step(sx < 0 ? 1 : -1);
-			else if (sy > 100) closeImage();
+			if (multiple && Math.abs(swipeX) > 60) step(swipeX < 0 ? 1 : -1);
+			else if (swipeY > 100) closeImage();
 		}
 		sx = sy = 0;
 
