@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { flushSync } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { viewer, closeImage } from '#lib/imageViewer.svelte.js';
 
@@ -33,6 +34,35 @@
 	const step = (delta: number) => {
 		const n = viewer.images.length;
 		viewer.index = (viewer.index + delta + n) % n;
+	};
+
+	const neighbour = (delta: number) => {
+		const n = viewer.images.length;
+		return viewer.images[(viewer.index + delta + n) % n];
+	};
+
+	// space between an image and its neighbours while they slide
+	const GAP = 20;
+	const SLIDE_MS = 200;
+	let sliding = false;
+
+	// slide the whole image out and the neighbour in, then swap them without a transition
+	const slide = (delta: number) => {
+		if (sliding) return;
+		if (!stage || zoomed) return step(delta);
+		sliding = true;
+		sx = -delta * (stage.clientWidth + GAP);
+		setTimeout(() => {
+			interacting = true;
+			// closed mid slide
+			if (viewer.images.length) step(delta);
+			sx = 0;
+			// apply the swap and force a style recalc so turning transitions back on doesn't animate it
+			flushSync();
+			void stage?.offsetWidth;
+			interacting = false;
+			sliding = false;
+		}, SLIDE_MS);
 	};
 
 	// every new image starts unzoomed
@@ -84,8 +114,8 @@
 	const onkeydown = (e: KeyboardEvent) => {
 		if (!open) return;
 		if (e.key === 'Escape') closeImage();
-		else if (multiple && e.key === 'ArrowRight') step(1);
-		else if (multiple && e.key === 'ArrowLeft') step(-1);
+		else if (multiple && e.key === 'ArrowRight') slide(1);
+		else if (multiple && e.key === 'ArrowLeft') slide(-1);
 		else if (e.key === '+' || e.key === '=') zoomAt(scale * 1.5);
 		else if (e.key === '-') zoomAt(scale / 1.5);
 		else if (e.key === '0') zoomAt(1);
@@ -134,7 +164,7 @@
 	};
 
 	const onpointerdown = (e: PointerEvent) => {
-		if ((e.target as Element).closest('button, a')) return;
+		if (sliding || (e.target as Element).closest('button, a')) return;
 		if (e.pointerType === 'mouse' && e.button !== 0) return;
 		if (pointers.size === 0) moved = false;
 		pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -192,11 +222,12 @@
 		const swipeY = sy;
 		if (scale < 1.01) reset();
 
+		sx = sy = 0;
 		if (wasPan && !zoomed && e.type === 'pointerup') {
-			if (multiple && Math.abs(swipeX) > 60) step(swipeX < 0 ? 1 : -1);
+			// the dom still shows the finger's offset, so the slide carries on from there
+			if (multiple && Math.abs(swipeX) > 60) slide(swipeX < 0 ? 1 : -1);
 			else if (swipeY > 100) closeImage();
 		}
-		sx = sy = 0;
 
 		// double tap to zoom, the mouse uses dblclick
 		if (e.pointerType !== 'mouse' && !moved && e.type === 'pointerup') {
@@ -257,6 +288,26 @@
 				if (e.pointerType === 'mouse') onpointerup(e);
 			}}
 		>
+			{#if multiple}
+				<!-- the neighbours wait just off screen and follow the swipe -->
+				{#each [-1, 1] as delta (delta)}
+					<div
+						class="pointer-events-none absolute inset-0 flex items-center justify-center {interacting
+							? ''
+							: 'transition-transform duration-200 ease-out'}"
+						style:transform="translateX(calc({delta * 100}% + {delta * GAP + sx}px))"
+						aria-hidden="true"
+					>
+						<img
+							class="max-h-full max-w-full object-contain"
+							src={neighbour(delta)}
+							alt=""
+							referrerpolicy="no-referrer"
+							draggable="false"
+						/>
+					</div>
+				{/each}
+			{/if}
 			<img
 				bind:this={img}
 				class="max-h-full max-w-full object-contain will-change-transform {interacting
@@ -328,13 +379,13 @@
 				type="button"
 				class="{control} absolute top-1/2 left-4 -translate-y-1/2 text-2xl"
 				aria-label="Previous image"
-				onclick={() => step(-1)}>&lsaquo;</button
+				onclick={() => slide(-1)}>&lsaquo;</button
 			>
 			<button
 				type="button"
 				class="{control} absolute top-1/2 right-4 -translate-y-1/2 text-2xl"
 				aria-label="Next image"
-				onclick={() => step(1)}>&rsaquo;</button
+				onclick={() => slide(1)}>&rsaquo;</button
 			>
 		{/if}
 
