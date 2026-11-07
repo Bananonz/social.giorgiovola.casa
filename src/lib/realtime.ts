@@ -48,7 +48,7 @@ export function onRealtime<K extends keyof RealtimeEvents>(event: K, fn: Listene
 /** (Re)opens the stream. The server picks the user from the session cookie. */
 export function connectRealtime() {
 	disconnectRealtime();
-	source = new EventSource('/api/stream');
+	source = new EventSource('/api/v1/stream');
 	source.addEventListener('open', () => {
 		for (const fn of listeners.get('open') ?? []) (fn as () => void)();
 	});

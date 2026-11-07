@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Button from '#lib/components/Button.svelte';
-	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
+	import { messageOf } from '#lib/api.js';
+	import { moderate, type ModerationAction } from '#lib/moderation.js';
 
 	type Props = {
 		username: string;
@@ -15,24 +17,24 @@
 
 	let message = $state<string | null>(null);
 	let failed = $state(false);
+	let busy = $state(false);
 
 	// shows the outcome of the last action, the profile reloads with the new state
-	const submit =
-		() =>
-		async (event: {
-			result: { type: string; data?: Record<string, unknown> };
-			update: () => Promise<void>;
-		}) => {
-			const data = event.result.data;
-			failed = event.result.type !== 'success';
-			message = (data?.message ?? data?.error ?? null) as string | null;
-			await event.update();
-		};
-
-	// enhance submits even when onsubmit calls preventDefault, so the confirm goes through cancel()
-	const confirmBan = ({ cancel }: { cancel: () => void }) => {
-		if (!confirm(`Ban @${username}? They will be signed out everywhere.`)) return cancel();
-		return submit();
+	const act = (action: ModerationAction, ask?: string) => async (e: SubmitEvent) => {
+		e.preventDefault();
+		if (ask && !confirm(ask)) return;
+		const reason = String(new FormData(e.currentTarget as HTMLFormElement).get('reason') ?? '');
+		busy = true;
+		try {
+			message = (await moderate(username, action, { reason })).message;
+			failed = false;
+			await invalidateAll();
+		} catch (err) {
+			message = messageOf(err);
+			failed = true;
+		} finally {
+			busy = false;
+		}
 	};
 </script>
 
@@ -60,18 +62,15 @@
 
 	<div class="flex flex-wrap items-center gap-2">
 		{#if banned}
-			<form method="POST" action="/admin?/unban" use:enhance={submit}>
-				<input type="hidden" name="username" value={username} />
-				<Button type="submit">Unban</Button>
+			<form method="POST" onsubmit={act('unban')}>
+				<Button type="submit" disabled={busy}>Unban</Button>
 			</form>
 		{:else}
 			<form
 				class="flex flex-wrap items-center gap-2"
 				method="POST"
-				action="/admin?/ban"
-				use:enhance={confirmBan}
+				onsubmit={act('ban', `Ban @${username}? They will be signed out everywhere.`)}
 			>
-				<input type="hidden" name="username" value={username} />
 				<input
 					class="input w-auto! min-w-0 flex-1 p-[5px]!"
 					type="text"
@@ -83,18 +82,11 @@
 			</form>
 		{/if}
 		{#if muted}
-			<form method="POST" action="/admin?/unmute" use:enhance={submit}>
-				<input type="hidden" name="username" value={username} />
-				<Button type="submit">Unmute</Button>
+			<form method="POST" onsubmit={act('unmute')}>
+				<Button type="submit" disabled={busy}>Unmute</Button>
 			</form>
 		{:else}
-			<form
-				class="flex flex-wrap items-center gap-2"
-				method="POST"
-				action="/admin?/mute"
-				use:enhance={submit}
-			>
-				<input type="hidden" name="username" value={username} />
+			<form class="flex flex-wrap items-center gap-2" method="POST" onsubmit={act('mute')}>
 				<input
 					class="input w-auto! min-w-0 flex-1 p-[5px]!"
 					type="text"

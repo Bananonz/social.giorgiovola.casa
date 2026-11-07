@@ -68,17 +68,40 @@ export const users = pgTable(
 	]
 );
 
-export const sessions = pgTable('sessions', {
-	token: text('token')
-		.primaryKey()
-		.default(sql`gen_random_uuid()`),
-	// the account that is signed in
-	user_id: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
-	// the identity currently in use, null when acting as the account itself
-	acting_id: integer('acting_id').references(() => users.id, { onDelete: 'set null' }),
-	// sessions expire server side (see src/lib/server/session.ts)
-	created_at: timestamptz('created_at').notNull().defaultNow()
-});
+// A signed in account: a browser session (kind cookie) or an API token (see src/lib/server/auth.ts).
+export const sessions = pgTable(
+	'sessions',
+	{
+		// cookie: the session cookie itself (a uuid). token / personal: the sha256 hex of the bearer
+		// token, which is only shown once and never stored
+		token: text('token')
+			.primaryKey()
+			.default(sql`gen_random_uuid()`),
+		// public id, so sessions can be listed and revoked without exposing the secret
+		id: serial('id').notNull().unique(),
+		// cookie: the web UI. token: from POST /api/v1/auth/login (or register, passkey login).
+		// personal: a personal access token created by the user
+		kind: text('kind', { enum: ['cookie', 'token', 'personal'] })
+			.notNull()
+			.default('cookie'),
+		// what the client called itself, or the name of a personal access token
+		name: text('name'),
+		user_agent: text('user_agent'),
+		// the account that is signed in
+		user_id: integer('user_id').references(() => users.id, { onDelete: 'cascade' }),
+		// the identity currently in use, null when acting as the account itself
+		acting_id: integer('acting_id').references(() => users.id, { onDelete: 'set null' }),
+		created_at: timestamptz('created_at').notNull().defaultNow(),
+		// sessions expire server side; null only for personal tokens made to never expire
+		expires_at: timestamptz('expires_at').default(sql`NOW() + INTERVAL '30 days'`),
+		// written at most every few minutes, shown in the session list
+		last_used_at: timestamptz('last_used_at')
+	},
+	(t) => [
+		index('sessions_user_id').on(t.user_id),
+		check('sessions_kind_check', sql`${t.kind} IN ('cookie', 'token', 'personal')`)
+	]
+);
 
 export const posts = pgTable(
 	'posts',

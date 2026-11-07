@@ -1,29 +1,25 @@
-import { db, inbox } from '#lib/server/db/index.js';
-import { and, eq, isNull } from 'drizzle-orm';
-import { getSwitcher } from '#lib/server/accounts.js';
-import { unreadMessageCount } from '#lib/server/messages.js';
-import { getMotd } from '#lib/server/motd.js';
 import type { LayoutServerLoad } from './$types';
+import { apiGet } from '#lib/apiLoad.js';
+import { userOf, type Me } from '#lib/me.js';
+import type { SwitcherAccount } from '#lib/types.js';
 
-export const load = (async ({ locals }) => {
-	let notisCount = 0;
-	let messagesCount = 0;
-	if (locals.user) {
-		messagesCount = await unreadMessageCount(locals.user.id);
-		notisCount = await db.$count(
-			inbox,
-			and(eq(inbox.user_id, locals.user.id), isNull(inbox.read_at))
-		);
-	}
-
+export const load = (async ({ fetch }) => {
+	// signed out is fine for /me and /auth/accounts: every page decides what that means for it
+	const [me, accounts, instance] = await Promise.all([
+		fetch('/api/v1/me').then((res) => (res.ok ? (res.json() as Promise<Me>) : null)),
+		fetch('/api/v1/auth/accounts').then(async (res) =>
+			res.ok ? ((await res.json()) as { items: SwitcherAccount[] }).items : []
+		),
+		apiGet<{ motd: string }>(fetch, '/instance')
+	]);
 	return {
-		user: locals.user,
-		role: locals.role,
-		muted: locals.muted,
-		muteReason: locals.muteReason,
-		notisCount,
-		messagesCount,
-		accounts: await getSwitcher(locals),
-		motd: await getMotd()
+		user: me ? userOf(me) : null,
+		role: me?.role ?? 'user',
+		muted: me?.muted ?? false,
+		muteReason: me?.mute_reason ?? null,
+		notisCount: me?.unread.notifications ?? 0,
+		messagesCount: me?.unread.messages ?? 0,
+		accounts,
+		motd: instance.motd
 	};
 }) satisfies LayoutServerLoad;

@@ -4,6 +4,7 @@
 	import UserPicker from '#lib/components/UserPicker.svelte';
 	import { user } from '#lib/store.js';
 	import type { ChatPeer } from '#lib/types.js';
+	import { errorOf } from '#lib/api.js';
 
 	// same limits as the server (src/lib/server/validation.ts)
 	const MAX_NAME = 64;
@@ -22,7 +23,7 @@
 		creating = true;
 		error = null;
 		try {
-			const res = await fetch('/api/groups', {
+			const res = await fetch('/api/v1/groups', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ name: name.trim(), members: members.map((m) => m.username) })
@@ -32,7 +33,7 @@
 				await goto(`/messages/groups/${id}`, { replaceState: true });
 				return;
 			}
-			error = res.status < 500 ? await res.text() : 'Something went wrong.';
+			error = res.status < 500 ? (await errorOf(res)).message : 'Something went wrong.';
 		} catch {
 			error = 'Could not reach the server, check your connection.';
 		}

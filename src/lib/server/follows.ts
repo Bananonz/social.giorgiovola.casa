@@ -1,4 +1,3 @@
-import { error, redirect } from '@sveltejs/kit';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { db, follows, users } from './db/index.js';
@@ -79,7 +78,8 @@ export async function listFollows(
 	userId: number,
 	list: FollowList,
 	viewerId: number | null | undefined,
-	offset = 0
+	offset = 0,
+	limit = FOLLOW_PAGE_SIZE
 ): Promise<FollowListEntry[]> {
 	// the other side of the follow is the profile listed
 	const listed = list === 'following' ? follows.followed_id : follows.follower_id;
@@ -104,8 +104,27 @@ export async function listFollows(
 		.innerJoin(users, eq(users.id, listed))
 		.where(and(eq(owner, userId), list === 'known' ? followedByViewer(listed, viewer) : undefined))
 		.orderBy(desc(follows.created_at), desc(listed))
-		.limit(FOLLOW_PAGE_SIZE)
+		.limit(limit)
 		.offset(offset);
+}
+
+/**
+ * A page of a profile's followers, followings or "followers you know" (`limit + 1` rows). Null
+ * when the profile doesn't exist.
+ */
+export async function followList(
+	username: string,
+	list: FollowList,
+	viewerId: number | null | undefined,
+	limit: number,
+	offset: number
+) {
+	const [profile] = await db
+		.select({ id: users.id })
+		.from(users)
+		.where(eq(users.username, username.toLowerCase()));
+	if (!profile) return null;
+	return listFollows(profile.id, list, viewerId, offset, limit + 1);
 }
 
 /** What the profile hover card shows. Null when the username doesn't exist. */
@@ -152,54 +171,4 @@ export async function getProfileCard(
 		followsYou: followsYou > 0,
 		followedBy
 	};
-}
-
-/** The followers / following pages: the profile, its counts and the first page of the list. */
-export async function loadFollowPage(
-	username: string,
-	list: FollowList,
-	viewerId: number | null | undefined
-) {
-	const [profile] = await db
-		.select({ id: users.id, username: users.username, name: users.name, avatar: users.avatar })
-		.from(users)
-		.where(eq(users.username, username.toLowerCase()));
-	if (!profile) error(404, 'User not found');
-	const others = !!viewerId && viewerId !== profile.id;
-	// the viewer's own profile has no followers they "know" beyond their own list
-	if (list === 'known' && !others) redirect(303, `/@${profile.username}/followers`);
-	const [stats, followedBy, entries] = await Promise.all([
-		getFollowStats(profile.id, viewerId),
-		others ? getFollowedBy(profile.id, viewerId) : { users: [], total: 0 },
-		listFollows(profile.id, list, viewerId)
-	]);
-	return {
-		profile: { username: profile.username, name: profile.name, avatar: profile.avatar },
-		list,
-		followers: stats.followers,
-		following: stats.following,
-		known: followedBy.total,
-		// "followers you know" only makes sense for someone else's profile
-		showKnown: others,
-		entries,
-		pageSize: FOLLOW_PAGE_SIZE
-	};
-}
-
-/** The infinite scroll of a followers / following page (see FollowList.svelte). */
-export async function moreFollows(
-	username: string,
-	list: FollowList,
-	viewerId: number | null | undefined,
-	request: Request
-) {
-	const formData = await request.formData();
-	const raw = formData.get('offset');
-	if (typeof raw !== 'string' || !/^\d{1,6}$/.test(raw)) error(400, 'Invalid offset');
-	const [profile] = await db
-		.select({ id: users.id })
-		.from(users)
-		.where(eq(users.username, username.toLowerCase()));
-	if (!profile) error(404, 'User not found');
-	return { entries: await listFollows(profile.id, list, viewerId, Number(raw)) };
 }

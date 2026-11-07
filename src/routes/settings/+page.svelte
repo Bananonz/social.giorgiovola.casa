@@ -2,8 +2,7 @@
 	import Avatar from '#lib/components/Avatar.svelte';
 	import Button from '#lib/components/Button.svelte';
 	import { page } from '$app/state';
-	import type { ActionData, PageData } from './$types';
-	import { enhance, type SubmitFunction } from '$app/forms';
+	import type { PageProps } from './$types';
 	import { invalidateAll } from '$app/navigation';
 	import {
 		WebAuthnError,
@@ -12,8 +11,9 @@
 		startRegistration
 	} from '@simplewebauthn/browser';
 	import { onMount } from 'svelte';
+	import { api, messageOf } from '#lib/api.js';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { data }: PageProps = $props();
 
 	const sectionClass = 'mb-10 flex flex-col gap-3';
 	const hintClass = 'text-[0.85em] text-muted';
@@ -26,23 +26,27 @@
 
 	const canAdd = $derived(data.passkeys.length < data.maxPasskeys);
 	const canAddBot = $derived(data.bots.length < data.maxBots);
-	// only in the response that created it: the token is never shown again
-	const botToken = $derived(form?.botToken ?? null);
-	// only some failures of createBot echo the fields back
-	const botValues = $derived(
-		(form as { botValues?: { name: string; username: string } } | null)?.botValues ?? null
-	);
+	// only in the response that created it: a token is never shown again
+	let newToken = $state<{ label: string; token: string; bot: boolean } | null>(null);
 	let copied = $state(false);
 	// the bot whose profile form is open
 	let editingBot = $state<number | null>(null);
 
-	// keeps the form open when the server refuses the changes, so they can be fixed
-	const saveBot: SubmitFunction =
-		() =>
-		async ({ result, update }) => {
-			await update({ reset: false });
-			if (result.type === 'success') editingBot = null;
-		};
+	/** Runs an API call, then reloads the page's data; failures show at the top. */
+	async function run(action: () => Promise<unknown>) {
+		busy = true;
+		error = '';
+		try {
+			await action();
+			await invalidateAll();
+			return true;
+		} catch (e) {
+			error = messageOf(e, 'Something went wrong, try again.');
+			return false;
+		} finally {
+			busy = false;
+		}
+	}
 
 	async function copyToken(token: string) {
 		await navigator.clipboard.writeText(token);
@@ -68,24 +72,17 @@
 	const date = (d: Date | string) =>
 		new Date(d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 
-	async function post(url: string, body?: unknown) {
-		const res = await fetch(url, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: body === undefined ? undefined : JSON.stringify(body)
-		});
-		const json = await res.json().catch(() => ({}));
-		if (!res.ok) throw new Error(json.error ?? 'Something went wrong, try again.');
-		return json;
-	}
-
 	async function addPasskey(e: SubmitEvent) {
 		e.preventDefault();
 		if (busy) return;
+		const form = e.currentTarget as HTMLFormElement;
+		const current_password = new FormData(form).get('currentPassword');
 		busy = true;
 		error = '';
 		try {
-			const optionsJSON = await post('/api/passkeys/register/options');
+			const { challenge_id, ...optionsJSON } = await api<
+				Parameters<typeof startRegistration>[0]['optionsJSON'] & { challenge_id: string }
+			>('me/passkeys/options', { method: 'POST', json: { current_password } });
 			let response;
 			try {
 				response = await startRegistration({ optionsJSON });
@@ -99,37 +96,157 @@
 				if (err instanceof Error && err.name === 'NotAllowedError') return;
 				throw err;
 			}
-			await post('/api/passkeys/register', { name: newName, response });
+			await api('me/passkeys', {
+				method: 'POST',
+				json: { challenge_id, name: newName, response }
+			});
 			newName = '';
+			form.reset();
 			await invalidateAll();
 		} catch (err) {
-			error = err instanceof Error ? err.message : 'Something went wrong, try again.';
+			error = messageOf(err, 'Something went wrong, try again.');
 		} finally {
 			busy = false;
 		}
 	}
 
-	const confirmAction =
-		(message: string): SubmitFunction =>
-		({ cancel }) => {
-			if (!confirm(message)) cancel();
-		};
+	async function renamePasskey(e: SubmitEvent, id: string) {
+		e.preventDefault();
+		const name = new FormData(e.currentTarget as HTMLFormElement).get('name');
+		if (await run(() => api(`me/passkeys/${id}`, { method: 'PATCH', json: { name } })))
+			renaming = null;
+	}
 
-	// enhance submits even when onsubmit calls preventDefault, so the confirm goes through cancel()
-	const confirmDelete =
-		(name: string): SubmitFunction =>
-		({ cancel }) => {
-			if (!confirm(`Delete the passkey "${name}"? You won't be able to sign in with it anymore.`))
-				cancel();
-		};
+	function deletePasskey(id: string, name: string) {
+		if (confirm(`Delete the passkey "${name}"? You won't be able to sign in with it anymore.`))
+			run(() => api(`me/passkeys/${id}`, { method: 'DELETE' }));
+	}
+
+	async function createBot(e: SubmitEvent) {
+		e.preventDefault();
+		const form = e.currentTarget as HTMLFormElement;
+		const fields = new FormData(form);
+		let created: { username: string; token: string } | undefined;
+		const ok = await run(async () => {
+			created = await api('me/bots', {
+				method: 'POST',
+				json: { name: fields.get('name'), username: fields.get('username') }
+			});
+		});
+		if (ok && created) {
+			newToken = { label: `@${created.username}`, token: created.token, bot: true };
+			form.reset();
+		}
+	}
+
+	async function regenerateToken(username: string) {
+		if (!confirm(`Regenerate the token of @${username}? The current one stops working right away.`))
+			return;
+		let created: { username: string; token: string } | undefined;
+		if (
+			await run(async () => (created = await api(`me/bots/${username}/token`, { method: 'POST' })))
+		)
+			newToken = { label: `@${created!.username}`, token: created!.token, bot: true };
+	}
+
+	function deleteBot(username: string) {
+		if (confirm(`Delete @${username} and all of its posts? This can't be undone.`))
+			run(() => api(`me/bots/${username}`, { method: 'DELETE' }));
+	}
+
+	// keeps the form open when the server refuses the changes, so they can be fixed
+	async function saveBot(e: SubmitEvent, username: string) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget as HTMLFormElement);
+		const avatar = form.get('avatar');
+		const ok = await run(async () => {
+			await api(`me/bots/${username}`, {
+				method: 'PATCH',
+				json: {
+					name: form.get('name'),
+					username: form.get('username'),
+					bio: form.get('bio'),
+					website: form.get('website')
+				}
+			});
+			// the username may just have changed
+			const current = String(form.get('username') ?? username)
+				.trim()
+				.replace(/^@/, '')
+				.toLowerCase();
+			if (avatar instanceof File && avatar.size > 0) {
+				const upload = new FormData();
+				upload.set('avatar', avatar);
+				await api(`me/bots/${current}/avatar`, { method: 'PUT', body: upload });
+			} else if (form.get('removeAvatar')) {
+				await api(`me/bots/${current}/avatar`, { method: 'DELETE' });
+			}
+		});
+		if (ok) editingBot = null;
+	}
+
+	const kindLabel = { cookie: 'Browser', token: 'App', personal: 'Personal access token' };
+
+	function revokeSession(id: number, current: boolean) {
+		const message = current
+			? 'Sign out of this browser?'
+			: 'Revoke this session? It is signed out right away.';
+		if (!confirm(message)) return;
+		run(() => api(`auth/sessions/${id}`, { method: 'DELETE' })).then((ok) => {
+			if (ok && current) location.href = '/';
+		});
+	}
+
+	async function createPersonalToken(e: SubmitEvent) {
+		e.preventDefault();
+		const form = e.currentTarget as HTMLFormElement;
+		const fields = new FormData(form);
+		const days = String(fields.get('days'));
+		let created: { name: string; token: string } | undefined;
+		const ok = await run(async () => {
+			created = await api('auth/tokens', {
+				method: 'POST',
+				json: {
+					name: fields.get('name'),
+					current_password: fields.get('currentPassword'),
+					expires_in_days: days === 'never' ? null : Number(days)
+				}
+			});
+		});
+		if (ok && created) {
+			newToken = { label: created.name, token: created.token, bot: false };
+			form.reset();
+		}
+	}
 </script>
 
 <svelte:head>
 	<title>Settings</title>
 </svelte:head>
 
-{#if form?.error || error}
-	<p class="mb-5 rounded-[5px] bg-danger p-[5px]">{form?.error || error}</p>
+{#if error}
+	<p class="mb-5 rounded-[5px] bg-danger p-[5px]">{error}</p>
+{/if}
+
+{#if newToken}
+	<div class="mb-10 flex flex-col gap-2.5 rounded-[10px] bg-black/70 p-2.5">
+		<p>
+			Token for <b>{newToken.label}</b>. Copy it now: you won't be able to see it again.
+		</p>
+		<code class="break-all select-all">{newToken.token}</code>
+		<div class="flex items-center gap-2.5">
+			<Button size="sm" onclick={() => copyToken(newToken!.token)}>
+				{copied ? 'Copied' : 'Copy token'}
+			</Button>
+		</div>
+		<p class={hintClass}>
+			Try it: <code class="break-all"
+				>curl -H "Authorization: Bearer {newToken.token}" {page.url.origin}{newToken.bot
+					? '/api/bot/me'
+					: '/api/v1/me'}</code
+			>
+		</p>
+	</div>
 {/if}
 
 <section class={sectionClass}>
@@ -147,15 +264,9 @@
 					{#if renaming === passkey.id}
 						<form
 							method="POST"
-							action="?/renamePasskey"
 							class="flex flex-1 items-center gap-1.5"
-							use:enhance={() =>
-								async ({ update }) => {
-									await update();
-									renaming = null;
-								}}
+							onsubmit={(e) => renamePasskey(e, passkey.id)}
 						>
-							<input type="hidden" name="id" value={passkey.id} />
 							<!-- svelte-ignore a11y_autofocus -->
 							<input
 								class="input flex-1"
@@ -166,7 +277,7 @@
 								aria-label="Passkey name"
 								autofocus
 							/>
-							<Button type="submit">Save</Button>
+							<Button type="submit" disabled={busy}>Save</Button>
 							<Button type="button" onclick={() => (renaming = null)}>Cancel</Button>
 						</form>
 					{:else}
@@ -180,14 +291,11 @@
 						</div>
 						<div class="flex items-center gap-1.5">
 							<Button type="button" onclick={() => (renaming = passkey.id)}>Rename</Button>
-							<form
-								method="POST"
-								action="?/deletePasskey"
-								use:enhance={confirmDelete(passkey.name)}
+							<Button
+								variant="danger"
+								disabled={busy}
+								onclick={() => deletePasskey(passkey.id, passkey.name)}>Delete</Button
 							>
-								<input type="hidden" name="id" value={passkey.id} />
-								<Button variant="danger" type="submit">Delete</Button>
-							</form>
 						</div>
 					{/if}
 				</li>
@@ -210,6 +318,15 @@
 				maxlength="64"
 				aria-label="Passkey name"
 			/>
+			<input
+				class="input"
+				type="password"
+				name="currentPassword"
+				autocomplete="current-password"
+				placeholder="Your password"
+				aria-label="Your password"
+				required
+			/>
 			<Button class="self-start" type="submit" disabled={busy}>
 				{busy ? 'Waiting for your device…' : 'Add passkey'}
 			</Button>
@@ -229,25 +346,6 @@
 		<a href="/api.txt">/api.txt</a>; the developer documentation is at
 		<a href="/developers">/developers</a>.
 	</p>
-
-	{#if botToken}
-		<div class="flex flex-col gap-2.5 rounded-[10px] bg-black/70 p-2.5">
-			<p>
-				Token for <b>@{botToken.username}</b>. Copy it now: you won't be able to see it again.
-			</p>
-			<code class="break-all select-all">{botToken.token}</code>
-			<div class="flex items-center gap-2.5">
-				<Button size="sm" onclick={() => copyToken(botToken.token)}>
-					{copied ? 'Copied' : 'Copy token'}
-				</Button>
-			</div>
-			<p class={hintClass}>
-				Try it: <code class="break-all"
-					>curl -H "Authorization: Bearer {botToken.token}" {page.url.origin}/api/bot/me</code
-				>
-			</p>
-		</div>
-	{/if}
 
 	{#if data.bots.length > 0}
 		<ul class="flex flex-col gap-2">
@@ -272,37 +370,20 @@
 							>
 								Edit
 							</Button>
-							<form
-								method="POST"
-								action="?/regenerateToken"
-								use:enhance={confirmAction(
-									`Regenerate the token of @${bot.username}? The current one stops working right away.`
-								)}
+							<Button disabled={busy} onclick={() => regenerateToken(bot.username)}
+								>New token</Button
 							>
-								<input type="hidden" name="id" value={bot.id} />
-								<Button type="submit">New token</Button>
-							</form>
-							<form
-								method="POST"
-								action="?/deleteBot"
-								use:enhance={confirmAction(
-									`Delete @${bot.username} and all of its posts? This can't be undone.`
-								)}
+							<Button variant="danger" disabled={busy} onclick={() => deleteBot(bot.username)}
+								>Delete</Button
 							>
-								<input type="hidden" name="id" value={bot.id} />
-								<Button variant="danger" type="submit">Delete</Button>
-							</form>
 						</div>
 					</div>
 					{#if editingBot === bot.id}
 						<form
 							class="flex flex-col gap-2.5"
 							method="POST"
-							action="?/editBot"
-							enctype="multipart/form-data"
-							use:enhance={saveBot}
+							onsubmit={(e) => saveBot(e, bot.username)}
 						>
-							<input type="hidden" name="id" value={bot.id} />
 							<div class="flex flex-col">
 								<label class="text-[0.8em] opacity-80" for="bot-avatar-{bot.id}">Picture</label>
 								<input
@@ -373,7 +454,7 @@
 								/>
 							</div>
 							<div class="flex items-center gap-1.5">
-								<Button type="submit">Save</Button>
+								<Button type="submit" disabled={busy}>Save</Button>
 								<Button onclick={() => (editingBot = null)}>Cancel</Button>
 							</div>
 						</form>
@@ -386,7 +467,7 @@
 	{/if}
 
 	{#if canAddBot}
-		<form class="mt-2.5 flex flex-col gap-3" method="POST" action="?/createBot" use:enhance>
+		<form class="mt-2.5 flex flex-col gap-3" method="POST" onsubmit={createBot}>
 			<h3>Create a bot</h3>
 			<input
 				class="input"
@@ -394,7 +475,6 @@
 				name="name"
 				placeholder="Display name"
 				maxlength="64"
-				value={botValues?.name ?? ''}
 				required
 			/>
 			<input
@@ -404,14 +484,95 @@
 				placeholder="Username (a-z, 0-9, _)"
 				pattern={'[a-zA-Z0-9_]{1,32}'}
 				maxlength="32"
-				value={botValues?.username ?? ''}
 				autocapitalize="none"
 				autocomplete="off"
 				required
 			/>
-			<Button class="self-start" type="submit">Create bot</Button>
+			<Button class="self-start" type="submit" disabled={busy}>Create bot</Button>
 		</form>
 	{:else}
 		<p class={hintClass}>You reached the limit of {data.maxBots} bots.</p>
 	{/if}
+</section>
+
+<section class={sectionClass}>
+	<h2>Sessions and API tokens</h2>
+	<p class={hintClass}>
+		Everywhere <b>@{data.account}</b> is signed in: browsers, apps that signed in with your password
+		or a passkey, and personal access tokens. A personal access token lets your own scripts and apps
+		use the <a href="/api.txt">API</a> as you; send it as
+		<code>Authorization: Bearer &lt;token&gt;</code>. Revoking signs it out right away.
+	</p>
+
+	<ul class="flex flex-col gap-2">
+		{#each data.sessions as session (session.id)}
+			<li
+				class="flex items-center gap-2.5 rounded-md border p-2 {session.current
+					? 'border-accent'
+					: 'border-line'}"
+			>
+				<div class="flex min-w-0 flex-1 flex-col">
+					<span class="truncate font-bold">
+						{session.name || kindLabel[session.kind]}
+						{#if session.current}<span class="text-[0.8em] font-medium text-accent">· this one</span
+							>{/if}
+					</span>
+					<span class="truncate text-[0.8em] text-muted">
+						{kindLabel[session.kind]} · signed in {date(session.created_at)} · {session.last_used_at
+							? `last used ${date(session.last_used_at)}`
+							: 'never used'} · {session.expires_at
+							? `expires ${date(session.expires_at)}`
+							: 'never expires'}
+					</span>
+					{#if session.user_agent}
+						<span class="truncate text-[0.75em] text-muted" title={session.user_agent}
+							>{session.user_agent}</span
+						>
+					{/if}
+				</div>
+				<Button
+					variant="danger"
+					size="sm"
+					disabled={busy}
+					onclick={() => revokeSession(session.id, session.current)}
+					>{session.current ? 'Sign out' : 'Revoke'}</Button
+				>
+			</li>
+		{/each}
+	</ul>
+
+	<form class="mt-2.5 flex flex-col gap-3" method="POST" onsubmit={createPersonalToken}>
+		<h3>New personal access token</h3>
+		<input
+			class="input"
+			type="text"
+			name="name"
+			placeholder="Name (e.g. My script)"
+			maxlength="64"
+			required
+		/>
+		<label class="flex flex-col text-[0.8em] opacity-80">
+			Expires
+			<select
+				class="border-b border-line bg-background p-2.5 text-[1.25em] outline-none"
+				name="days"
+			>
+				<option value="30">in 30 days</option>
+				<option value="90" selected>in 90 days</option>
+				<option value="365">in a year</option>
+				<option value="never">never</option>
+			</select>
+		</label>
+		<label class="flex flex-col text-[0.8em] opacity-80">
+			Your password
+			<input
+				class="border-b border-line bg-transparent p-2.5 text-[1.25em] outline-none"
+				type="password"
+				name="currentPassword"
+				autocomplete="current-password"
+				required
+			/>
+		</label>
+		<Button class="self-start" type="submit" disabled={busy}>Create token</Button>
+	</form>
 </section>

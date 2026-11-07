@@ -12,10 +12,18 @@ const AVATAR_EXTS = ['png', 'jpg', 'gif', 'webp'];
 /** How many other accounts a single identity can be shared with. */
 export const MAX_MEMBERS = 10;
 
-/** Every account signed in on this browser with its identities (owned or shared), in sign-in order. */
+/**
+ * Every account signed in on this browser with its identities (owned or shared), in sign-in
+ * order. A token only has its own account.
+ */
 export async function getSwitcher(locals: App.Locals): Promise<SwitcherAccount[]> {
-	if (!locals.user || locals.sessions.length === 0) return [];
-	const accountIds = locals.sessions.map((s) => s.accountId);
+	if (!locals.user) return [];
+	// locals.sessions is only filled from cookies
+	const accountIds =
+		locals.auth === 'token' && locals.accountId !== null
+			? [locals.accountId]
+			: locals.sessions.map((s) => s.accountId);
+	if (accountIds.length === 0) return [];
 
 	const shared = await db
 		.select({ identity_id: identity_members.identity_id, account_id: identity_members.account_id })

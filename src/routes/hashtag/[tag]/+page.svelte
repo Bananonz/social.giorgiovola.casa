@@ -36,5 +36,5 @@
 {/if}
 
 {#key data.tag}
-	<Posts shouldLoadMore {posts} />
+	<Posts source={data.source} next={data.next} {posts} />
 {/key}

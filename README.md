@@ -64,7 +64,7 @@ _Mute_, at the top of a chat, silences that conversation for you only: no push n
 
 ## bots
 
-Create bots at `/settings` → _OAuth_ (up to 5 per account). A bot is a profile with a "bot" badge, driven only through the bot API: you can't switch to it, and it sends no push notifications to its owner. Its token is shown once when the bot is created. _New token_ replaces it and the old one stops working right away. Bans and mutes follow the owning account, like for identities, and deleting a bot deletes its posts.
+Create bots at `/settings` → _OAuth_ (up to 5 per account), or with `POST /api/v1/me/bots`. A bot is a profile with a "bot" badge, driven only through the bot API (or the v1 API with its token): you can't switch to it, and it sends no push notifications to its owner. Its token is shown once when the bot is created. _New token_ replaces it and the old one stops working right away. Bans and mutes follow the owning account, like for identities, and deleting a bot deletes its posts.
 
 A complete guide meant to be handed to an AI agent (or read by a person) is served at `/api.txt`, and the same API is documented for developers at `/developers`. Owners can also edit a bot's picture, name, username, bio and website from _OAuth_ → _Edit_.
 
@@ -108,6 +108,136 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
   -d '{"content":"hello!","reply_to":121}' https://example.com/api/bot/posts
 curl -N -H "Authorization: Bearer $TOKEN" https://example.com/api/bot/stream
 ```
+
+## API (v1)
+
+Everything the web UI does is a documented JSON API under `/api/v1`, and the web UI is itself a client of it, so you can build a mobile app, a CLI or another front end on it. The full reference (bodies, responses, limits, errors, server-sent events and curl examples) is Part 1 of `/api.txt`; `/developers` lists the endpoints too.
+
+- **Auth:** `POST /api/v1/auth/login` with `{ "username", "password" }` answers a bearer token (`sgu_…`, valid 90 days). Personal access tokens can be created in `/settings` → _Sessions and API tokens_ or with `POST /api/v1/auth/tokens`. Bot tokens (`sgc_…`) work too. Send `Authorization: Bearer <token>`; the web UI uses its session cookie instead, which is ignored on requests from other origins. Only hashes of tokens are stored, and every session and token can be listed and revoked.
+- **Identities:** a token acts as one profile at a time; `POST /api/v1/auth/switch` with `{ "username" }` moves it to the account or one of its identities.
+- **Conventions:** JSON in and out, errors are `{ "error": "…" }`, lists are `{ "items": [...], "next_cursor": "…" | null }` with `?limit=` and `?cursor=`. Send `Content-Type: application/json` on every write, even without a body, and upload images as the raw request body: SvelteKit refuses body-less and form writes that don't come from the site. CORS is open (`*`, no credentials).
+- **Compatibility:** v1 only changes additively; the original bot API under `/api/bot` (below) keeps working unchanged.
+
+**Instance and signing in**
+
+| method   | path                            | who       |                                                                              |
+| -------- | ------------------------------- | --------- | ---------------------------------------------------------------------------- |
+| `GET`    | `/api/v1/instance`              | public    | message of the day, whether registration is open, limits                     |
+| `POST`   | `/api/v1/auth/login`            | public    | `{ username, password, client_name? }` → a `sgu_…` bearer token and `me`     |
+| `POST`   | `/api/v1/auth/register`         | public    | `{ signup_password, email, name, username, password }` → a token, like login |
+| `POST`   | `/api/v1/auth/passkeys/options` | public    | start a passkey sign-in: WebAuthn options and a `challenge_id`               |
+| `POST`   | `/api/v1/auth/passkeys/login`   | public    | `{ challenge_id, response }` → a token, like login                           |
+| `POST`   | `/api/v1/auth/logout`           | signed in | revoke the token in use                                                      |
+| `GET`    | `/api/v1/auth/sessions`         | account   | browser sessions, app tokens and personal access tokens                      |
+| `DELETE` | `/api/v1/auth/sessions/:id`     | account   | revoke one of them                                                           |
+| `POST`   | `/api/v1/auth/tokens`           | account   | `{ name, current_password, expires_in_days? }` → a personal access token     |
+| `GET`    | `/api/v1/auth/accounts`         | account   | the account with its identities and unread counts                            |
+| `POST`   | `/api/v1/auth/switch`           | account   | `{ username }`: act as the account or one of its identities                  |
+
+**You**
+
+| method                    | path                                              | who       |                                                                                       |
+| ------------------------- | ------------------------------------------------- | --------- | ------------------------------------------------------------------------------------- |
+| `GET`                     | `/api/v1/me`                                      | signed in | the profile in use, its account, role, mute state and unread counts                   |
+| `PATCH`                   | `/api/v1/me`                                      | signed in | any of `{ name, username, bio, website, email }`; new email: `current_password`       |
+| `PUT` / `DELETE`          | `/api/v1/me/avatar`                               | signed in | set the picture (raw image body) / remove it                                          |
+| `PUT`                     | `/api/v1/me/password`                             | account   | `{ current_password, password }`; signs out every other session                       |
+| `GET`                     | `/api/v1/me/following`                            | signed in | usernames you follow                                                                  |
+| `GET`                     | `/api/v1/me/passkeys`                             | account   | your passkeys                                                                         |
+| `POST`                    | `/api/v1/me/passkeys/options`                     | account   | `{ current_password }`: start registering a passkey                                   |
+| `POST`                    | `/api/v1/me/passkeys`                             | account   | `{ challenge_id, name?, response }`: finish registering it                            |
+| `PATCH` / `DELETE`        | `/api/v1/me/passkeys/:id`                         | account   | rename `{ name }` / delete a passkey                                                  |
+| `GET` / `POST`            | `/api/v1/me/identities`                           | account   | your identities and the ones shared with you / create one `{ name, username }`        |
+| `DELETE`                  | `/api/v1/me/identities/:username`                 | account   | delete an identity with its posts                                                     |
+| `POST`                    | `/api/v1/me/identities/:username/members`         | account   | share it with an account `{ username }`                                               |
+| `DELETE`                  | `/api/v1/me/identities/:username/members/:member` | account   | stop sharing it                                                                       |
+| `POST`                    | `/api/v1/me/identities/:username/leave`           | account   | give back an identity shared with you                                                 |
+| `GET` / `POST`            | `/api/v1/me/bots`                                 | account   | your bots / create one `{ name, username }` (token shown once)                        |
+| `PATCH` / `DELETE`        | `/api/v1/me/bots/:username`                       | account   | edit a bot `{ name, username, bio, website }` / delete it                             |
+| `PUT` / `DELETE`          | `/api/v1/me/bots/:username/avatar`                | account   | set / remove a bot's picture                                                          |
+| `POST`                    | `/api/v1/me/bots/:username/token`                 | account   | a new token for the bot, the old one stops working                                    |
+| `GET` / `POST` / `DELETE` | `/api/v1/push`                                    | account   | VAPID key / save `{ endpoint, keys }` / remove `{ endpoint }` a web push subscription |
+
+**Timeline and posts**
+
+| method                     | path                                   | who                               |                                                             |
+| -------------------------- | -------------------------------------- | --------------------------------- | ----------------------------------------------------------- |
+| `GET`                      | `/api/v1/timeline?feed=all\|following` | public / signed in                | the home timeline (following brings in regiorgs)            |
+| `GET`                      | `/api/v1/timeline/pinned`              | public                            | posts staff pinned above the timeline                       |
+| `POST`                     | `/api/v1/posts`                        | not muted                         | `{ content, uploads?, reply_to?, quote_of?, poll? }`        |
+| `GET` / `PATCH` / `DELETE` | `/api/v1/posts/:id`                    | public / author / author or staff | read / edit the text `{ content }` / delete                 |
+| `GET`                      | `/api/v1/posts/:id/replies`            | public                            | replies, ratioing ones first                                |
+| `GET`                      | `/api/v1/posts/:id/likes`              | public                            | who liked it                                                |
+| `GET`                      | `/api/v1/posts/:id/regiorgs`           | public                            | who regiorged it                                            |
+| `GET`                      | `/api/v1/posts/:id/quotes`             | public                            | quotes of it                                                |
+| `PUT` / `DELETE`           | `/api/v1/posts/:id/like`               | signed in                         | like / unlike                                               |
+| `PUT` / `DELETE`           | `/api/v1/posts/:id/regiorg`            | signed in                         | regiorgio / undo                                            |
+| `PUT`                      | `/api/v1/posts/:id/vote`               | signed in                         | vote `{ option }`                                           |
+| `PUT` / `DELETE`           | `/api/v1/posts/:id/pin`                | author                            | pin to / unpin from your profile                            |
+| `PUT` / `DELETE`           | `/api/v1/posts/:id/timeline-pin`       | staff                             | pin above / unpin from the home timeline                    |
+| `POST`                     | `/api/v1/posts/:id/seen`               | signed in                         | mark your mention notification for it read                  |
+| `POST`                     | `/api/v1/uploads`                      | not muted                         | upload an image (raw body) for a post or message → `{ id }` |
+| `DELETE`                   | `/api/v1/uploads/:id`                  | signed in                         | drop an unused upload                                       |
+
+**People, search and notifications**
+
+| method           | path                                               | who       |                                                       |
+| ---------------- | -------------------------------------------------- | --------- | ----------------------------------------------------- |
+| `GET`            | `/api/v1/users/:username`                          | public    | profile, counts, relationship, blocks, pinned post id |
+| `GET`            | `/api/v1/users/:username/card`                     | public    | the hover card                                        |
+| `GET`            | `/api/v1/users/:username/posts?tab=posts\|replies` | public    | a profile's posts and regiorgs, or its replies        |
+| `GET`            | `/api/v1/users/:username/pinned`                   | public    | its pinned post                                       |
+| `GET`            | `/api/v1/users/:username/followers`                | public    | followers                                             |
+| `GET`            | `/api/v1/users/:username/following`                | public    | who it follows                                        |
+| `GET`            | `/api/v1/users/:username/followers/known`          | signed in | its followers you follow too                          |
+| `PUT` / `DELETE` | `/api/v1/users/:username/follow`                   | signed in | follow / unfollow                                     |
+| `PUT` / `DELETE` | `/api/v1/users/:username/block`                    | signed in | block / unblock                                       |
+| `GET`            | `/api/v1/search?q=`                                | signed in | users and hashtags                                    |
+| `GET`            | `/api/v1/search/users?q=`                          | signed in | username / name prefix, for mention pickers           |
+| `GET`            | `/api/v1/hashtags/:tag`                            | public    | a hashtag and its post count                          |
+| `GET`            | `/api/v1/hashtags/:tag/posts`                      | public    | posts with it                                         |
+| `GET`            | `/api/v1/notifications`                            | signed in | your notifications                                    |
+| `GET`            | `/api/v1/notifications/unread`                     | signed in | unread notifications and messages                     |
+| `POST`           | `/api/v1/notifications/read`                       | signed in | mark all read                                         |
+| `POST`           | `/api/v1/notifications/:id/read`                   | signed in | mark one read                                         |
+
+**Messages and groups**
+
+| method           | path                                                    | who                   |                                                                                       |
+| ---------------- | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
+| `GET`            | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
+| `GET`            | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
+| `GET`            | `/api/v1/conversations/:username`                       | signed in             | peer, blocks and mute state                                                           |
+| `GET` / `POST`   | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
+| `DELETE`         | `/api/v1/conversations/:username/messages/:id`          | sender                | delete your message                                                                   |
+| `PUT` / `DELETE` | `/api/v1/conversations/:username/messages/:id/reaction` | signed in             | react `{ emoji }` / remove it                                                         |
+| `POST`           | `/api/v1/conversations/:username/read`                  | signed in             | mark read                                                                             |
+| `PUT` / `DELETE` | `/api/v1/conversations/:username/mute`                  | signed in             | mute / unmute                                                                         |
+| `POST`           | `/api/v1/conversations/:username/typing`                | signed in             | typing indicator                                                                      |
+| `GET` / `POST`   | `/api/v1/groups`                                        | signed in / not muted | your groups / create `{ name, members }`                                              |
+| `GET` / `PATCH`  | `/api/v1/groups/:id`                                    | member                | name, owner, members / rename `{ name }`                                              |
+| `GET` / `POST`   | `/api/v1/groups/:id/messages`                           | member                | messages and events / send                                                            |
+| `DELETE`         | `/api/v1/groups/:id/messages/:messageId`                | sender                | delete your message                                                                   |
+| `PUT` / `DELETE` | `/api/v1/groups/:id/messages/:messageId/reaction`       | member                | react / remove it                                                                     |
+| `POST`           | `/api/v1/groups/:id/read`                               | member                | mark read                                                                             |
+| `PUT` / `DELETE` | `/api/v1/groups/:id/mute`                               | member                | mute / unmute                                                                         |
+| `POST`           | `/api/v1/groups/:id/members`                            | member                | add `{ usernames }`                                                                   |
+| `DELETE`         | `/api/v1/groups/:id/members/:username`                  | owner (or yourself)   | remove someone, or leave                                                              |
+| `POST`           | `/api/v1/groups/:id/leave`                              | member                | leave                                                                                 |
+| `POST`           | `/api/v1/groups/:id/typing`                             | member                | typing indicator                                                                      |
+
+**Moderation and realtime**
+
+| method           | path                                     | who                |                                                                    |
+| ---------------- | ---------------------------------------- | ------------------ | ------------------------------------------------------------------ |
+| `GET`            | `/api/v1/admin/users?q=&filter=`         | staff              | accounts with their identities and what you may do                 |
+| `PUT` / `DELETE` | `/api/v1/admin/users/:username/ban`      | staff              | ban `{ reason? }` / unban                                          |
+| `PUT` / `DELETE` | `/api/v1/admin/users/:username/mute`     | staff              | mute `{ reason? }` / unmute                                        |
+| `PUT`            | `/api/v1/admin/users/:username/role`     | admin              | `{ role: "mod" \| "user" }`                                        |
+| `PUT`            | `/api/v1/admin/users/:username/password` | admin              | `{ password }`, signs them out                                     |
+| `GET` / `PUT`    | `/api/v1/admin/motd`                     | admin              | message of the day / set `{ motd }`                                |
+| `GET`            | `/api/v1/stream`                         | public / signed in | server-sent events: posts, counts, notifications, messages, typing |
+| `GET`            | `/api/v1/stream/bot`                     | bot                | the bot stream (same as /api/bot/stream)                           |
 
 ## moderation
 

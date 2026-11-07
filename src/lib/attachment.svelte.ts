@@ -34,13 +34,13 @@ export class Attachment {
 		const done = new Promise<string>((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
 			this.#xhr = xhr;
-			xhr.open('POST', '/api/uploads');
+			xhr.open('POST', '/api/v1/uploads');
 			xhr.upload.onprogress = (e) => {
 				if (e.lengthComputable) this.progress = e.loaded / e.total;
 			};
 			xhr.onload = () => {
 				this.#xhr = null;
-				if (xhr.status === 200) {
+				if (xhr.status === 201 || xhr.status === 200) {
 					try {
 						const { id } = JSON.parse(xhr.responseText) as { id: string };
 						this.progress = 1;
@@ -53,7 +53,7 @@ export class Attachment {
 				reject(
 					new UploadError(
 						[400, 403, 429].includes(xhr.status)
-							? xhr.responseText
+							? errorText(xhr.responseText)
 							: xhr.status === 413
 							? 'Image is too big.'
 							: 'Could not upload the image.'
@@ -86,7 +86,11 @@ export class Attachment {
 		this.#xhr?.abort();
 		this.release();
 		if (this.id) {
-			fetch(`/api/uploads/${this.id}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+			fetch(`/api/v1/uploads/${this.id}`, {
+				method: 'DELETE',
+				headers: { 'Content-Type': 'application/json' },
+				keepalive: true
+			}).catch(() => {});
 		}
 	}
 }
@@ -98,4 +102,13 @@ export class Attachment {
 export async function uploadIds(attachments: Attachment[], fresh = false): Promise<string[]> {
 	if (fresh) for (const a of attachments) a.upload();
 	return Promise.all(attachments.map((a) => a.done));
+}
+
+/** The message of an API error body (`{ "error": "…" }`). */
+function errorText(body: string) {
+	try {
+		return (JSON.parse(body) as { error?: string }).error || 'Could not upload the image.';
+	} catch {
+		return body || 'Could not upload the image.';
+	}
 }

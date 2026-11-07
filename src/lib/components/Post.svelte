@@ -5,6 +5,7 @@
 	import Posts from './Posts.svelte';
 	import { page } from '$app/state';
 	import { afterNavigate, goto, invalidate } from '$app/navigation';
+	import { api, allPages, ApiError, errorOf, messageOf, type Page } from '#lib/api.js';
 	import Likes from './Likes.svelte';
 	import Avatar from './Avatar.svelte';
 	import PostComposer from './PostComposer.svelte';
@@ -155,27 +156,19 @@
 	);
 
 	async function fetchReplies(id: number): Promise<Post[]> {
-		const res = await fetch(`/api/posts/${id}/replies`, {
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		});
-		return res.json();
+		return allPages((cursor) =>
+			api<Page<Post>>(`posts/${id}/replies?limit=200${cursor ? `&cursor=${cursor}` : ''}`)
+		);
 	}
 
 	async function deletePost() {
 		isModalOpen = false;
-		const res = await fetch('/api/posts', {
-			method: 'DELETE',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				id: post.id
-			})
-		});
-		// staff can try to delete any post, the server refuses the ones they can't (a missing one is gone anyway)
-		if (!res.ok && res.status !== 404) return alert(await res.text());
+		try {
+			await api(`posts/${post.id}`, { method: 'DELETE' });
+		} catch (e) {
+			// staff can try to delete any post, the server refuses the ones they can't (a missing one is gone anyway)
+			if (!(e instanceof ApiError && e.status === 404)) return alert(messageOf(e));
+		}
 		if (page.route.id === '/@[username]/[post]') {
 			return await goto('/');
 		}
@@ -193,17 +186,15 @@
 	);
 
 	async function togglePin() {
-		const res = await fetch('/api/posts/pin', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				id: post.id
-			})
-		});
-		if (!res.ok) return alert((await res.text()) || 'Could not pin');
-		isPinned = (await res.json()).pinned;
+		try {
+			isPinned = (
+				await api<{ pinned: boolean }>(`posts/${post.id}/pin`, {
+					method: isPinned ? 'DELETE' : 'PUT'
+				})
+			).pinned;
+		} catch (e) {
+			return alert(messageOf(e, 'Could not pin'));
+		}
 		showToast(isPinned ? 'Pinned to your profile!' : 'Unpinned!');
 		await invalidate('app:posts');
 	}
@@ -215,18 +206,15 @@
 	);
 
 	async function toggleTimelinePin() {
-		const res = await fetch('/api/posts/timeline-pin', {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json'
-			},
-			body: JSON.stringify({
-				id: post.id,
-				pinned: !isTimelinePinned
-			})
-		});
-		if (!res.ok) return alert((await res.text()) || 'Could not pin');
-		isTimelinePinned = (await res.json()).pinned;
+		try {
+			isTimelinePinned = (
+				await api<{ pinned: boolean }>(`posts/${post.id}/timeline-pin`, {
+					method: isTimelinePinned ? 'DELETE' : 'PUT'
+				})
+			).pinned;
+		} catch (e) {
+			return alert(messageOf(e, 'Could not pin'));
+		}
 		showToast(isTimelinePinned ? 'Pinned to the timeline for everyone!' : 'Unpinned!');
 		await invalidate('app:posts');
 	}
@@ -246,13 +234,10 @@
 		if (target) likePop++;
 		const seq = ++likeSeq;
 		try {
-			const res = await fetch('/api/posts/like', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				// the wanted state, not a toggle: repeated taps can't flip it the wrong way
-				body: JSON.stringify({ id: post.id, liked: target })
+			// the wanted state, not a toggle: repeated taps can't flip it the wrong way
+			const res = await fetch(`/api/v1/posts/${post.id}/like`, {
+				method: target ? 'PUT' : 'DELETE',
+				headers: { 'Content-Type': 'application/json' }
 			});
 			if (seq !== likeSeq) return;
 			if (res.ok) {
@@ -344,14 +329,9 @@
 		regiorged = !before.regiorged;
 		regiorgs = Math.max(0, before.regiorgs + (regiorged ? 1 : -1));
 		try {
-			const res = await fetch('/api/posts/regiorg', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					id: post.id
-				})
+			const res = await fetch(`/api/v1/posts/${post.id}/regiorg`, {
+				method: regiorged ? 'PUT' : 'DELETE',
+				headers: { 'Content-Type': 'application/json' }
 			});
 			if (res.ok) {
 				const data = await res.json();
@@ -360,7 +340,7 @@
 				regiorgs = data.regiorgs;
 			} else {
 				({ regiorged, regiorgs } = before);
-				if (res.status !== 401) alert((await res.text()) || 'Could not regiorgio');
+				if (res.status !== 401) alert((await errorOf(res)).message || 'Could not regiorgio');
 			}
 		} catch {
 			({ regiorged, regiorgs } = before);

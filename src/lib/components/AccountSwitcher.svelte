@@ -5,13 +5,25 @@
 	import { user } from '#lib/store.js';
 	import { getAvatar } from '#lib/utils.js';
 	import UnreadBadges from './UnreadBadges.svelte';
+	import { switchTo } from '#lib/accounts.js';
 
 	const dotClass =
 		'absolute top-0 right-0 size-4 rounded-full border-2 border-background bg-accent';
 	const linkClass = 'rounded-sm p-1.5 text-[0.9em] hover:bg-white/5 hover:no-underline';
 
-	let open = false;
-	let root: HTMLElement;
+	let open = $state(false);
+	let root: HTMLElement | undefined = $state();
+	let switching = $state(false);
+
+	async function switchProfile(username: string) {
+		switching = true;
+		try {
+			await switchTo(username, page.url.pathname);
+		} catch (e) {
+			switching = false;
+			alert(e instanceof Error ? e.message : "Couldn't switch profile");
+		}
+	}
 
 	const accounts = () => (page.data.accounts ?? []) as SwitcherAccount[];
 	const otherUnread = () =>
@@ -35,7 +47,7 @@
 	const label = (p: SwitcherProfile) => `${p.name} (@${p.username})`;
 </script>
 
-<svelte:window on:click={onWindowClick} on:keydown={onKeydown} />
+<svelte:window onclick={onWindowClick} onkeydown={onKeydown} />
 
 {#if $user}
 	<div class="relative" bind:this={root}>
@@ -44,7 +56,7 @@
 			aria-haspopup="menu"
 			aria-expanded={open}
 			title="Switch account"
-			on:click={() => (open = !open)}
+			onclick={() => (open = !open)}
 		>
 			<img
 				class="size-12.5 max-w-none rounded-full object-cover"
@@ -92,34 +104,32 @@
 							</p>
 							{#each profilesOf(account) as profile (profile.id)}
 								{#if !profile.active}
-									<form method="POST" action="/accounts?/switch">
-										<input type="hidden" name="id" value={profile.id} />
-										<input type="hidden" name="redirectTo" value={page.url.pathname} />
-										<button
-											class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-[5px] outline-none hover:bg-white/5 focus-visible:bg-white/5"
-											type="submit"
-											role="menuitem"
-											title={label(profile)}
-										>
-											<img
-												class="size-7 max-w-none shrink-0 rounded-full object-cover"
-												src={getAvatar(profile, 28)}
-												alt=""
-												width="28"
-												height="28"
-											/>
-											<span class="flex min-w-0 flex-1 flex-col text-left">
-												<span class="truncate text-[0.9em] text-foreground">{profile.name}</span>
-												<span class="truncate text-[0.8em] text-muted"
-													>@{profile.username}{profile.sharedBy ? ' · shared' : ''}</span
-												>
-											</span>
-											<UnreadBadges
-												notifications={profile.unread}
-												messages={profile.unreadMessages}
-											/>
-										</button>
-									</form>
+									<button
+										class="flex w-full cursor-pointer items-center gap-2 rounded-sm px-1.5 py-[5px] outline-none hover:bg-white/5 focus-visible:bg-white/5"
+										type="button"
+										role="menuitem"
+										title={label(profile)}
+										disabled={switching}
+										onclick={() => switchProfile(profile.username)}
+									>
+										<img
+											class="size-7 max-w-none shrink-0 rounded-full object-cover"
+											src={getAvatar(profile, 28)}
+											alt=""
+											width="28"
+											height="28"
+										/>
+										<span class="flex min-w-0 flex-1 flex-col text-left">
+											<span class="truncate text-[0.9em] text-foreground">{profile.name}</span>
+											<span class="truncate text-[0.8em] text-muted"
+												>@{profile.username}{profile.sharedBy ? ' · shared' : ''}</span
+											>
+										</span>
+										<UnreadBadges
+											notifications={profile.unread}
+											messages={profile.unreadMessages}
+										/>
+									</button>
 								{/if}
 							{/each}
 						</div>

@@ -1,34 +1,32 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import { getPosts } from '#lib/server/posts.js';
-import { parseId } from '#lib/server/validation.js';
+import { allPages, type Page } from '#lib/api.js';
+import { apiGet } from '#lib/apiLoad.js';
+import type { Post } from '#lib/types.js';
 
-export const load = (async ({ params, locals }) => {
-	const postId = parseId(params.post);
-	if (postId === null) error(404, 'Post not found');
+const MAX_REPLIES = 200;
 
-	const posts = await getPosts({
-		loggedUser: locals.user,
-		fromUser: { username: params.username.toLowerCase() },
-		postId
-	});
-
-	if (posts.length === 0) {
-		error(404, 'Post not found');
-	}
+export const load = (async ({ params, fetch }) => {
+	if (!/^\d{1,10}$/.test(params.post)) error(404, 'Post not found');
+	const post = await apiGet<Post>(fetch, `/posts/${params.post}`, { login: false });
+	// the URL names the author: another username is another post
+	if (post.user.username !== params.username.toLowerCase()) error(404, 'Post not found');
 
 	return {
-		post: posts[0],
+		post,
 		streamed: {
 			replies:
-				posts[0].replies_count > 0
-					? getPosts({
-							loggedUser: locals.user,
-							reply_to: postId,
-							order: 'ASC',
-							ratioFirst: true
-					  })
-					: []
+				post.replies_count > 0
+					? allPages((cursor) =>
+							apiGet<Page<Post>>(
+								fetch,
+								`/posts/${post.id}/replies?limit=${MAX_REPLIES}${
+									cursor ? `&cursor=${cursor}` : ''
+								}`,
+								{ login: false }
+							)
+					  )
+					: Promise.resolve([] as Post[])
 		}
 	};
 }) satisfies PageServerLoad;

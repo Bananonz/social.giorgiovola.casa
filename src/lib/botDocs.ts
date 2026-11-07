@@ -495,3 +495,573 @@ for await (const chunk of res.body) {
       await api(\`/api/bot/messages/\${payload.sender}\`, { content: 'got it' });
   }
 }`;
+
+/** One row of the v1 reference: auth is who may call it. */
+export type V1Endpoint = { method: string; path: string; auth: string; summary: string };
+export type V1Group = { id: string; title: string; endpoints: V1Endpoint[] };
+
+// The /api/v1 reference on /developers and in README.md. /api.txt (src/lib/server/apiGuide.ts)
+// has the full details; every v1 change touches all three.
+export const v1Groups: V1Group[] = [
+	{
+		id: 'v1-auth',
+		title: 'Instance and signing in',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/instance',
+				auth: 'public',
+				summary: 'message of the day, whether registration is open, limits'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/login',
+				auth: 'public',
+				summary: '`{ username, password, client_name? }` → a `sgu_…` bearer token and `me`'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/register',
+				auth: 'public',
+				summary: '`{ signup_password, email, name, username, password }` → a token, like login'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/passkeys/options',
+				auth: 'public',
+				summary: 'start a passkey sign-in: WebAuthn options and a `challenge_id`'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/passkeys/login',
+				auth: 'public',
+				summary: '`{ challenge_id, response }` → a token, like login'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/logout',
+				auth: 'signed in',
+				summary: 'revoke the token in use'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/auth/sessions',
+				auth: 'account',
+				summary: 'browser sessions, app tokens and personal access tokens'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/auth/sessions/:id',
+				auth: 'account',
+				summary: 'revoke one of them'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/tokens',
+				auth: 'account',
+				summary:
+					'`{ name, current_password, expires_in_days? }` → a personal access token (shown once)'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/auth/accounts',
+				auth: 'account',
+				summary: 'the account with its identities and unread counts'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/auth/switch',
+				auth: 'account',
+				summary: '`{ username }`: act as the account or one of its identities'
+			}
+		]
+	},
+	{
+		id: 'v1-me',
+		title: 'You',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/me',
+				auth: 'signed in',
+				summary: 'the profile in use, its account, role, mute state and unread counts'
+			},
+			{
+				method: 'PATCH',
+				path: '/api/v1/me',
+				auth: 'signed in',
+				summary:
+					'any of `{ name, username, bio, website, email }`; a new email needs `current_password`'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/me/avatar',
+				auth: 'signed in',
+				summary: 'set the picture (raw image body) / remove it'
+			},
+			{
+				method: 'PUT',
+				path: '/api/v1/me/password',
+				auth: 'account',
+				summary: '`{ current_password, password }`; signs out every other session'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/me/following',
+				auth: 'signed in',
+				summary: 'usernames you follow'
+			},
+			{ method: 'GET', path: '/api/v1/me/passkeys', auth: 'account', summary: 'your passkeys' },
+			{
+				method: 'POST',
+				path: '/api/v1/me/passkeys/options',
+				auth: 'account',
+				summary: '`{ current_password }`: start registering a passkey'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/me/passkeys',
+				auth: 'account',
+				summary: '`{ challenge_id, name?, response }`: finish registering it'
+			},
+			{
+				method: 'PATCH / DELETE',
+				path: '/api/v1/me/passkeys/:id',
+				auth: 'account',
+				summary: 'rename `{ name }` / delete a passkey'
+			},
+			{
+				method: 'GET / POST',
+				path: '/api/v1/me/identities',
+				auth: 'account',
+				summary: 'your identities and the ones shared with you / create one `{ name, username }`'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/me/identities/:username',
+				auth: 'account',
+				summary: 'delete an identity with its posts'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/me/identities/:username/members',
+				auth: 'account',
+				summary: 'share it with an account `{ username }`'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/me/identities/:username/members/:member',
+				auth: 'account',
+				summary: 'stop sharing it'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/me/identities/:username/leave',
+				auth: 'account',
+				summary: 'give back an identity shared with you'
+			},
+			{
+				method: 'GET / POST',
+				path: '/api/v1/me/bots',
+				auth: 'account',
+				summary: 'your bots / create one `{ name, username }` (token shown once)'
+			},
+			{
+				method: 'PATCH / DELETE',
+				path: '/api/v1/me/bots/:username',
+				auth: 'account',
+				summary: 'edit a bot `{ name, username, bio, website }` / delete it'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/me/bots/:username/avatar',
+				auth: 'account',
+				summary: "set / remove a bot's picture"
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/me/bots/:username/token',
+				auth: 'account',
+				summary: 'a new token for the bot, the old one stops working'
+			},
+			{
+				method: 'GET / POST / DELETE',
+				path: '/api/v1/push',
+				auth: 'account',
+				summary:
+					'VAPID key / save `{ endpoint, keys }` / remove `{ endpoint }` a web push subscription'
+			}
+		]
+	},
+	{
+		id: 'v1-posts',
+		title: 'Timeline and posts',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/timeline?feed=all|following',
+				auth: 'public / signed in',
+				summary: 'the home timeline (following brings in regiorgs)'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/timeline/pinned',
+				auth: 'public',
+				summary: 'posts staff pinned above the timeline'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/posts',
+				auth: 'not muted',
+				summary: '`{ content, uploads?, reply_to?, quote_of?, poll? }`'
+			},
+			{
+				method: 'GET / PATCH / DELETE',
+				path: '/api/v1/posts/:id',
+				auth: 'public / author / author or staff',
+				summary: 'read / edit the text `{ content }` / delete'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/posts/:id/replies',
+				auth: 'public',
+				summary: 'replies, ratioing ones first'
+			},
+			{ method: 'GET', path: '/api/v1/posts/:id/likes', auth: 'public', summary: 'who liked it' },
+			{
+				method: 'GET',
+				path: '/api/v1/posts/:id/regiorgs',
+				auth: 'public',
+				summary: 'who regiorged it'
+			},
+			{ method: 'GET', path: '/api/v1/posts/:id/quotes', auth: 'public', summary: 'quotes of it' },
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/posts/:id/like',
+				auth: 'signed in',
+				summary: 'like / unlike'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/posts/:id/regiorg',
+				auth: 'signed in',
+				summary: 'regiorgio / undo'
+			},
+			{
+				method: 'PUT',
+				path: '/api/v1/posts/:id/vote',
+				auth: 'signed in',
+				summary: 'vote `{ option }`'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/posts/:id/pin',
+				auth: 'author',
+				summary: 'pin to / unpin from your profile'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/posts/:id/timeline-pin',
+				auth: 'staff',
+				summary: 'pin above / unpin from the home timeline'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/posts/:id/seen',
+				auth: 'signed in',
+				summary: 'mark your mention notification for it read'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/uploads',
+				auth: 'not muted',
+				summary: 'upload an image (raw body) for a post or message → `{ id }`'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/uploads/:id',
+				auth: 'signed in',
+				summary: 'drop an unused upload'
+			}
+		]
+	},
+	{
+		id: 'v1-users',
+		title: 'People, search and notifications',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username',
+				auth: 'public',
+				summary: 'profile, counts, relationship, blocks, pinned post id'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/card',
+				auth: 'public',
+				summary: 'the hover card'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/posts?tab=posts|replies',
+				auth: 'public',
+				summary: "a profile's posts and regiorgs, or its replies"
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/pinned',
+				auth: 'public',
+				summary: 'its pinned post'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/followers',
+				auth: 'public',
+				summary: 'followers'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/following',
+				auth: 'public',
+				summary: 'who it follows'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/users/:username/followers/known',
+				auth: 'signed in',
+				summary: 'its followers you follow too'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/users/:username/follow',
+				auth: 'signed in',
+				summary: 'follow / unfollow'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/users/:username/block',
+				auth: 'signed in',
+				summary: 'block / unblock'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/search?q=',
+				auth: 'signed in',
+				summary: 'users and hashtags'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/search/users?q=',
+				auth: 'signed in',
+				summary: 'username / name prefix, for mention pickers'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/hashtags/:tag',
+				auth: 'public',
+				summary: 'a hashtag and its post count'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/hashtags/:tag/posts',
+				auth: 'public',
+				summary: 'posts with it'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/notifications',
+				auth: 'signed in',
+				summary: 'your notifications'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/notifications/unread',
+				auth: 'signed in',
+				summary: 'unread notifications and messages'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/notifications/read',
+				auth: 'signed in',
+				summary: 'mark all read'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/notifications/:id/read',
+				auth: 'signed in',
+				summary: 'mark one read'
+			}
+		]
+	},
+	{
+		id: 'v1-chat',
+		title: 'Messages and groups',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/conversations',
+				auth: 'signed in',
+				summary: 'direct conversations and groups'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/share-targets',
+				auth: 'signed in',
+				summary: 'where a post can be shared'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/conversations/:username',
+				auth: 'signed in',
+				summary: 'peer, blocks and mute state'
+			},
+			{
+				method: 'GET / POST',
+				path: '/api/v1/conversations/:username/messages',
+				auth: 'signed in / not muted',
+				summary:
+					'messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }`'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/conversations/:username/messages/:id',
+				auth: 'sender',
+				summary: 'delete your message'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/conversations/:username/messages/:id/reaction',
+				auth: 'signed in',
+				summary: 'react `{ emoji }` / remove it'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/conversations/:username/read',
+				auth: 'signed in',
+				summary: 'mark read'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/conversations/:username/mute',
+				auth: 'signed in',
+				summary: 'mute / unmute'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/conversations/:username/typing',
+				auth: 'signed in',
+				summary: 'typing indicator'
+			},
+			{
+				method: 'GET / POST',
+				path: '/api/v1/groups',
+				auth: 'signed in / not muted',
+				summary: 'your groups / create `{ name, members }`'
+			},
+			{
+				method: 'GET / PATCH',
+				path: '/api/v1/groups/:id',
+				auth: 'member',
+				summary: 'name, owner, members / rename `{ name }`'
+			},
+			{
+				method: 'GET / POST',
+				path: '/api/v1/groups/:id/messages',
+				auth: 'member',
+				summary: 'messages and events / send'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/groups/:id/messages/:messageId',
+				auth: 'sender',
+				summary: 'delete your message'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/groups/:id/messages/:messageId/reaction',
+				auth: 'member',
+				summary: 'react / remove it'
+			},
+			{ method: 'POST', path: '/api/v1/groups/:id/read', auth: 'member', summary: 'mark read' },
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/groups/:id/mute',
+				auth: 'member',
+				summary: 'mute / unmute'
+			},
+			{
+				method: 'POST',
+				path: '/api/v1/groups/:id/members',
+				auth: 'member',
+				summary: 'add `{ usernames }`'
+			},
+			{
+				method: 'DELETE',
+				path: '/api/v1/groups/:id/members/:username',
+				auth: 'owner (or yourself)',
+				summary: 'remove someone, or leave'
+			},
+			{ method: 'POST', path: '/api/v1/groups/:id/leave', auth: 'member', summary: 'leave' },
+			{
+				method: 'POST',
+				path: '/api/v1/groups/:id/typing',
+				auth: 'member',
+				summary: 'typing indicator'
+			}
+		]
+	},
+	{
+		id: 'v1-admin',
+		title: 'Moderation and realtime',
+		endpoints: [
+			{
+				method: 'GET',
+				path: '/api/v1/admin/users?q=&filter=',
+				auth: 'staff',
+				summary: 'accounts with their identities and what you may do'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/admin/users/:username/ban',
+				auth: 'staff',
+				summary: 'ban `{ reason? }` / unban'
+			},
+			{
+				method: 'PUT / DELETE',
+				path: '/api/v1/admin/users/:username/mute',
+				auth: 'staff',
+				summary: 'mute `{ reason? }` / unmute'
+			},
+			{
+				method: 'PUT',
+				path: '/api/v1/admin/users/:username/role',
+				auth: 'admin',
+				summary: '`{ role: "mod" | "user" }`'
+			},
+			{
+				method: 'PUT',
+				path: '/api/v1/admin/users/:username/password',
+				auth: 'admin',
+				summary: '`{ password }`, signs them out'
+			},
+			{
+				method: 'GET / PUT',
+				path: '/api/v1/admin/motd',
+				auth: 'admin',
+				summary: 'message of the day / set `{ motd }`'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/stream',
+				auth: 'public / signed in',
+				summary: 'server-sent events: posts, counts, notifications, messages, typing'
+			},
+			{
+				method: 'GET',
+				path: '/api/v1/stream/bot',
+				auth: 'bot',
+				summary: 'the bot stream (same as /api/bot/stream)'
+			}
+		]
+	}
+];

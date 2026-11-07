@@ -40,7 +40,10 @@ export function userHandleBase64(accountId: number) {
 	return isoBase64URL.fromBuffer(userHandle(accountId));
 }
 
-/** Remembers `challenge` for this browser; a new ceremony replaces the previous one. */
+/**
+ * Remembers `challenge` and returns its id. Browsers also get it in a cookie (a new ceremony
+ * replaces the previous one); other clients send the id back as `challenge_id`.
+ */
 export function saveChallenge(
 	cookies: Cookies,
 	challenge: string,
@@ -58,13 +61,19 @@ export function saveChallenge(
 	const key = crypto.randomUUID();
 	pending.set(key, { challenge, ceremony, accountId, expires: Date.now() + CHALLENGE_TTL_MS });
 	cookies.set(CHALLENGE_COOKIE, key, { ...cookieOptions, maxAge: CHALLENGE_TTL_MS / 1000 });
+	return key;
 }
 
-/** The pending challenge of this browser for `ceremony`, usable once. */
-export function takeChallenge(cookies: Cookies, ceremony: Ceremony): Pending | null {
-	const key = cookies.get(CHALLENGE_COOKIE);
+/** The pending challenge for `ceremony`, by `challenge_id` or else the browser's cookie. Usable once. */
+export function takeChallenge(
+	cookies: Cookies,
+	ceremony: Ceremony,
+	challengeId?: unknown
+): Pending | null {
+	const fromCookie = cookies.get(CHALLENGE_COOKIE);
+	const key = typeof challengeId === 'string' && challengeId ? challengeId : fromCookie;
 	if (!key) return null;
-	cookies.delete(CHALLENGE_COOKIE, cookieOptions);
+	if (key === fromCookie) cookies.delete(CHALLENGE_COOKIE, cookieOptions);
 	const p = pending.get(key);
 	pending.delete(key);
 	if (!p || p.ceremony !== ceremony || p.expires <= Date.now()) return null;

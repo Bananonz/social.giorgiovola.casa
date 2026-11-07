@@ -16,7 +16,7 @@ const cache = new Map<string, { at: number; card: Promise<ProfileCard | null> }>
 function fetchCard(username: string) {
 	const hit = cache.get(username);
 	if (hit && Date.now() - hit.at < CACHE_MS) return hit.card;
-	const card = fetch(`/api/users/${encodeURIComponent(username)}/card`)
+	const card = fetch(`/api/v1/users/${encodeURIComponent(username)}/card`)
 		.then((res) => (res.ok ? (res.json() as Promise<ProfileCard>) : null))
 		.catch(() => null);
 	cache.set(username, { at: Date.now(), card });

@@ -79,11 +79,11 @@ export function sendTyping(target: { to: string } | { group: number }) {
 	const now = Date.now();
 	if (now - (lastSent.get(key) ?? 0) < SEND_EVERY_MS) return;
 	lastSent.set(key, now);
-	fetch('/api/typing', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(target)
-	}).catch(() => {});
+	const url =
+		'to' in target
+			? `/api/v1/conversations/${encodeURIComponent(target.to)}/typing`
+			: `/api/v1/groups/${target.group}/typing`;
+	fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' } }).catch(() => {});
 }
 
 /** Your message went out: the next keystroke signals again right away. */

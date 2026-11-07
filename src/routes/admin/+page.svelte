@@ -1,10 +1,47 @@
 <script lang="ts">
 	import Button from '#lib/components/Button.svelte';
 	import type { PageProps } from './$types';
-	import { enhance, type SubmitFunction } from '$app/forms';
 	import Avatar from '#lib/components/Avatar.svelte';
+	import { invalidateAll } from '$app/navigation';
+	import { api, messageOf } from '#lib/api.js';
+	import { moderate, type ModerationAction } from '#lib/moderation.js';
 
-	let { data, form }: PageProps = $props();
+	let { data }: PageProps = $props();
+
+	// the outcome of the last action
+	let form = $state<{ message?: string; error?: string } | null>(null);
+	let busy = $state(false);
+
+	async function run(action: () => Promise<{ message: string }>) {
+		busy = true;
+		try {
+			form = { message: (await action()).message };
+			await invalidateAll();
+			return true;
+		} catch (e) {
+			form = { error: messageOf(e) };
+			return false;
+		} finally {
+			busy = false;
+		}
+	}
+
+	/** Submits one of the staff forms: its fields go to the action. */
+	const act =
+		(username: string, action: ModerationAction, ask?: string) => async (e: SubmitEvent) => {
+			e.preventDefault();
+			if (ask && !confirm(ask)) return;
+			const el = e.currentTarget as HTMLFormElement;
+			const fields = Object.fromEntries(new FormData(el)) as Record<string, string>;
+			// the new password shouldn't linger in the field
+			if (await run(() => moderate(username, action, fields))) el.reset();
+		};
+
+	async function saveMotd(e: SubmitEvent) {
+		e.preventDefault();
+		const motd = String(new FormData(e.currentTarget as HTMLFormElement).get('motd') ?? '');
+		await run(() => api('admin/motd', { method: 'PUT', json: { motd } }));
+	}
 
 	const filters = [
 		{ value: 'all', label: 'All' },
@@ -31,23 +68,6 @@
 		const q = data.q.toLowerCase();
 		return !!q && (p.username.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
 	};
-
-	// enhance submits even when onsubmit calls preventDefault, so the confirms go through cancel()
-	const confirmBan =
-		(username: string): SubmitFunction =>
-		({ cancel }) => {
-			if (!confirm(`Ban @${username}? They will be signed out everywhere.`)) cancel();
-		};
-	const confirmPassword =
-		(username: string): SubmitFunction =>
-		({ cancel }) => {
-			if (!confirm(`Reset the password of @${username}? They will be signed out everywhere.`))
-				return cancel();
-			return async ({ update }) => {
-				// the new password shouldn't linger in the field
-				await update({ reset: true });
-			};
-		};
 </script>
 
 <svelte:head>
@@ -74,7 +94,7 @@
 	{/if}
 
 	{#if data.motd !== null}
-		<form class="flex flex-col gap-2.5" method="POST" action="?/motd" use:enhance>
+		<form class="flex flex-col gap-2.5" method="POST" onsubmit={saveMotd}>
 			<label class="flex flex-col" for="motd">
 				<span class="text-[0.8em] opacity-80">Message of the day</span>
 				<span class={hintClass}>
@@ -149,17 +169,17 @@
 					<p class={hintClass}>Mute reason: {u.mute_reason}</p>
 				{/if}
 
-				{#if u.identities.length > 0 || u.sharedWith.length > 0}
-					{@const profiles = [...u.identities, ...u.sharedWith]}
+				{#if u.identities.length > 0 || u.shared_with.length > 0}
+					{@const profiles = [...u.identities, ...u.shared_with]}
 					<details class="text-[0.9em]" open={!matches(u) && profiles.some(matches)}>
 						<summary class="cursor-pointer text-muted">
 							{#if u.identities.length > 0}
 								{u.identities.length}
 								{u.identities.length === 1 ? 'identity' : 'identities'}
 							{/if}
-							{#if u.identities.length > 0 && u.sharedWith.length > 0}·{/if}
-							{#if u.sharedWith.length > 0}
-								{u.sharedWith.length} shared by others
+							{#if u.identities.length > 0 && u.shared_with.length > 0}·{/if}
+							{#if u.shared_with.length > 0}
+								{u.shared_with.length} shared by others
 							{/if}
 						</summary>
 						<ul class="mt-2 flex flex-col gap-1.5">
@@ -186,7 +206,7 @@
 									{/if}
 								</li>
 							{/each}
-							{#each u.sharedWith as i (i.username)}
+							{#each u.shared_with as i (i.username)}
 								<li
 									class="flex items-center gap-2.5 rounded-md p-[5px] {matches(i)
 										? 'bg-white/5'
@@ -209,21 +229,22 @@
 					</details>
 				{/if}
 
-				{#if u.canModerate}
+				{#if u.can_moderate}
 					<div class="flex flex-wrap items-center gap-2">
 						{#if u.banned_at}
-							<form method="POST" action="?/unban" use:enhance>
-								<input type="hidden" name="username" value={u.username} />
-								<Button type="submit">Unban</Button>
+							<form method="POST" onsubmit={act(u.username, 'unban')}>
+								<Button type="submit" disabled={busy}>Unban</Button>
 							</form>
 						{:else}
 							<form
 								class="flex flex-wrap items-center gap-2"
 								method="POST"
-								action="?/ban"
-								use:enhance={confirmBan(u.username)}
+								onsubmit={act(
+									u.username,
+									'ban',
+									`Ban @${u.username}? They will be signed out everywhere.`
+								)}
 							>
-								<input type="hidden" name="username" value={u.username} />
 								<input
 									class="input w-auto! min-w-0 flex-1 p-[5px]!"
 									type="text"
@@ -235,18 +256,15 @@
 							</form>
 						{/if}
 						{#if u.muted_at}
-							<form method="POST" action="?/unmute" use:enhance>
-								<input type="hidden" name="username" value={u.username} />
-								<Button type="submit">Unmute</Button>
+							<form method="POST" onsubmit={act(u.username, 'unmute')}>
+								<Button type="submit" disabled={busy}>Unmute</Button>
 							</form>
 						{:else}
 							<form
 								class="flex flex-wrap items-center gap-2"
 								method="POST"
-								action="?/mute"
-								use:enhance
+								onsubmit={act(u.username, 'mute')}
 							>
-								<input type="hidden" name="username" value={u.username} />
 								<input
 									class="input w-auto! min-w-0 flex-1 p-[5px]!"
 									type="text"
@@ -262,22 +280,23 @@
 					<p class={hintClass}>This is you.</p>
 				{/if}
 
-				{#if u.canManage}
+				{#if u.can_manage}
 					<details class="text-[0.9em]">
 						<summary class="cursor-pointer text-muted">Admin actions</summary>
 						<div class="mt-2 flex flex-col gap-2">
-							<form method="POST" action="?/role" use:enhance>
-								<input type="hidden" name="username" value={u.username} />
+							<form method="POST" onsubmit={act(u.username, 'role')}>
 								<input type="hidden" name="role" value={u.role === 'mod' ? 'user' : 'mod'} />
 								<Button type="submit">{u.role === 'mod' ? 'Remove mod' : 'Make mod'}</Button>
 							</form>
 							<form
 								class="flex flex-wrap items-center gap-2"
 								method="POST"
-								action="?/password"
-								use:enhance={confirmPassword(u.username)}
+								onsubmit={act(
+									u.username,
+									'password',
+									`Reset the password of @${u.username}? They will be signed out everywhere.`
+								)}
 							>
-								<input type="hidden" name="username" value={u.username} />
 								<input
 									class="input w-auto! min-w-0 flex-1 p-[5px]!"
 									type="password"

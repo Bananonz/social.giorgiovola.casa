@@ -2,9 +2,23 @@
 	import Button from '#lib/components/Button.svelte';
 	import { page } from '$app/state';
 	import type { SwitcherAccount } from '#lib/types.js';
+	import { api } from '#lib/api.js';
 
 	const accounts = () => (page.data.accounts ?? []) as SwitcherAccount[];
 	const current = () => accounts().find((a) => a.active || a.identities.some((i) => i.active));
+
+	let busy = $state(false);
+
+	async function logout(all: boolean) {
+		busy = true;
+		try {
+			await api('auth/logout', { method: 'POST', json: { all } });
+		} catch {
+			// signed out already
+		}
+		// a full reload: the next signed in account (if any) takes over the page and its stream
+		location.href = '/';
+	}
 </script>
 
 <div class="flex flex-col items-start gap-2.5">
@@ -14,13 +28,11 @@
 				&nbsp;and its identities{/if}?
 		</p>
 		<div class="flex flex-wrap gap-2.5">
-			<form method="POST" action="?/current">
-				<Button type="submit">Log out @{account.username}</Button>
-			</form>
+			<Button disabled={busy} onclick={() => logout(false)}>Log out @{account.username}</Button>
 			{#if accounts().length > 1}
-				<form method="POST" action="?/all">
-					<Button variant="danger" type="submit">Log out of all accounts</Button>
-				</form>
+				<Button variant="danger" disabled={busy} onclick={() => logout(true)}
+					>Log out of all accounts</Button
+				>
 			{/if}
 		</div>
 	{:else}

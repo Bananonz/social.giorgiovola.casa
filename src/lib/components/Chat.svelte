@@ -16,6 +16,7 @@
 		MessageReplyTo
 	} from '#lib/types.js';
 	import MentionInput from './MentionInput.svelte';
+	import { api, errorOf } from '#lib/api.js';
 	import { splitMentions } from '#lib/mentions.js';
 	import { profileHover } from '#lib/profileCard.svelte.js';
 	import { isHttpLink } from '#lib/utils.js';
@@ -91,9 +92,10 @@
 	const MAX_BYTES = 10 * 1024 * 1024;
 	const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
 
-	const threadUrl = groupId !== null ? `/api/groups/${groupId}` : `/api/messages/${peerUsername}`;
-	const sendUrl = groupId !== null ? `/api/groups/${groupId}/messages` : '/api/messages';
-	const reactUrl = `${threadUrl}/reactions`;
+	const threadUrl =
+		groupId !== null ? `/api/v1/groups/${groupId}` : `/api/v1/conversations/${peerUsername}`;
+	const messagesUrl = `${threadUrl}/messages`;
+	type ThreadPage = { items: Message[]; next_cursor: string | null };
 
 	const QUICK_REACTIONS = ['❤️', '😂', '😮', '😢', '😡', '👍'];
 	// swiping a message this far to the right replies to it, like on WhatsApp
@@ -217,17 +219,19 @@
 				: [...others, { emoji, username: me.username, name: me.name, avatar: me.avatar }]
 		);
 		try {
-			const res = await fetch(reactUrl, {
+			const res = await fetch(`${messagesUrl}/${message.id}/reaction`, {
 				method: removing ? 'DELETE' : 'PUT',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(removing ? { id: message.id } : { id: message.id, emoji })
+				body: JSON.stringify(removing ? {} : { emoji })
 			});
 			if (res.ok) {
 				setReactions(message.id, (await res.json()).reactions);
 				return;
 			}
 			showError(
-				res.status === 403 || res.status === 429 ? await res.text() : 'Something went wrong.'
+				res.status === 403 || res.status === 429
+					? (await errorOf(res)).message
+					: 'Something went wrong.'
 			);
 		} catch {
 			showError('Could not reach the server, check your connection.');
@@ -438,7 +442,7 @@
 		pendingRead = true;
 		if (document.visibilityState !== 'visible' || !isAtBottom()) return;
 		pendingRead = false;
-		fetch(`${threadUrl}/read`, { method: 'POST' }).catch(() => {});
+		api(`${threadUrl}/read`, { method: 'POST' }).catch(() => {});
 	}
 
 	function onScroll() {
@@ -452,11 +456,14 @@
 	async function toggleMute() {
 		const muting = !muted;
 		try {
-			const res = await fetch(`${threadUrl}/mute`, { method: muting ? 'POST' : 'DELETE' });
-			if (res.ok) muted = muting;
-			else showError('Something went wrong.');
-		} catch {
-			showError('Could not reach the server, check your connection.');
+			await api(`${threadUrl}/mute`, { method: muting ? 'PUT' : 'DELETE' });
+			muted = muting;
+		} catch (e) {
+			showError(
+				e instanceof TypeError
+					? 'Could not reach the server, check your connection.'
+					: 'Something went wrong.'
+			);
 		}
 	}
 
@@ -468,11 +475,14 @@
 		)
 			return;
 		try {
-			const res = await fetch(`${threadUrl}/block`, { method: blocking ? 'POST' : 'DELETE' });
-			if (res.ok) blockedByMe = blocking;
-			else showError('Something went wrong.');
-		} catch {
-			showError('Could not reach the server, check your connection.');
+			await api(`users/${peerUsername}/block`, { method: blocking ? 'PUT' : 'DELETE' });
+			blockedByMe = blocking;
+		} catch (e) {
+			showError(
+				e instanceof TypeError
+					? 'Could not reach the server, check your connection.'
+					: 'Something went wrong.'
+			);
 		}
 	}
 
@@ -480,10 +490,9 @@
 		const forWhom = groupId !== null ? 'everyone in the group' : 'both of you';
 		if (!confirm(`Delete this message? It will be removed for ${forWhom}.`)) return;
 		try {
-			const res = await fetch(sendUrl, {
+			const res = await fetch(`${messagesUrl}/${message.id}`, {
 				method: 'DELETE',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ id: message.id })
+				headers: { 'Content-Type': 'application/json' }
 			});
 			// 404: already gone, e.g. deleted from another tab
 			if (res.ok || res.status === 404) remove(message.id);
@@ -505,9 +514,10 @@
 	/** Catches up on what the stream can't have delivered: it drops while the app is in the background. */
 	async function sync() {
 		try {
-			const res = await fetch(threadUrl);
+			const res = await fetch(messagesUrl);
 			if (!res.ok) return;
-			const latest: { messages: Message[]; hasMore: boolean } = await res.json();
+			const page: ThreadPage = await res.json();
+			const latest = { messages: page.items, hasMore: page.next_cursor !== null };
 			// drop what was deleted while the stream was down, within the span this page covers
 			const oldest = latest.hasMore ? latest.messages[0]?.id ?? 0 : 0;
 			const ids = new Set(latest.messages.map((m) => m.id));
@@ -529,12 +539,12 @@
 		if (!hasMore || loadingOlder || messages.length === 0) return;
 		loadingOlder = true;
 		try {
-			const res = await fetch(`${threadUrl}?before=${messages[0].id}`);
+			const res = await fetch(`${messagesUrl}?cursor=${messages[0].id}`);
 			if (res.ok) {
-				const older: { messages: Message[]; hasMore: boolean } = await res.json();
+				const older: ThreadPage = await res.json();
 				const height = list.scrollHeight;
-				messages = merge(messages, older.messages);
-				hasMore = older.hasMore;
+				messages = merge(messages, older.items);
+				hasMore = older.next_cursor !== null;
 				await tick();
 				// keep the viewer on the message they were reading
 				list.scrollTop += list.scrollHeight - height;
@@ -633,12 +643,15 @@
 		const settle = () => (pending = pending.filter((p) => p.key !== key));
 		const send = async (fresh: boolean) => {
 			const uploads = await uploadIds(draft.attachments, fresh);
-			const body = new FormData();
-			if (groupId === null) body.set('to', peerUsername);
-			body.set('content', text);
-			if (draft.replyingTo) body.set('reply_to', String(draft.replyingTo.id));
-			for (const id of uploads) body.append('uploads', id);
-			return fetch(sendUrl, { method: 'POST', body });
+			return fetch(messagesUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					content: text,
+					reply_to: draft.replyingTo?.id ?? null,
+					uploads
+				})
+			});
 		};
 		try {
 			let res = await send(false);
@@ -654,7 +667,7 @@
 			}
 			showError(
 				res.status === 400 || res.status === 403 || res.status === 410 || res.status === 429
-					? await res.text()
+					? (await errorOf(res)).message
 					: res.status === 413
 					? 'Images are too big.'
 					: 'Something went wrong.'

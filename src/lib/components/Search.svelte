@@ -44,7 +44,7 @@
 		const q = trimmed;
 		const current = ++request;
 		try {
-			const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+			const res = await fetch(`/api/v1/search?q=${encodeURIComponent(q)}`);
 			// a newer keystroke supersedes this response
 			if (!res.ok || current !== request) return;
 			({ users, hashtags } = await res.json());

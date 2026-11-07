@@ -13,7 +13,12 @@ import type { ChatMessage, GroupMessage, MessageReaction, Post } from '#lib/type
 
 type Client = {
 	userId: number | null;
+	/** the session or token (sessions.token) the stream was opened with */
+	sessionKey: string | null;
+	/** the bot whose token opened the stream, so revoking the token ends it (closeBotStreams) */
+	botId: number | null;
 	send: (chunk: string) => void;
+	close: () => void;
 };
 
 const clients = new Set<Client>();
@@ -65,13 +70,30 @@ function eventStream(
 }
 
 /** Registers a client; returns the stream body. */
-export function openStream(userId: number | null, signal: AbortSignal) {
-	return eventStream(signal, (send) => {
-		const client: Client = { userId, send };
+export function openStream(
+	userId: number | null,
+	sessionKey: string | null,
+	botId: number | null,
+	signal: AbortSignal
+) {
+	return eventStream(signal, (send, close) => {
+		const client: Client = { userId, sessionKey, botId, send, close };
 		clients.add(client);
 		if (userId !== null) void sendUnreadCount(client);
 		return () => clients.delete(client);
 	});
+}
+
+/**
+ * Ends the streams opened with these sessions or tokens. Like bot tokens, a session is only
+ * checked when its stream opens, so this runs whenever sessions are deleted (sign out, revoke,
+ * password change, ban).
+ */
+export function closeSessionStreams(keys: Iterable<string>) {
+	const set = new Set(keys);
+	if (set.size === 0) return;
+	for (const client of [...clients])
+		if (client.sessionKey !== null && set.has(client.sessionKey)) client.close();
 }
 
 type BotClient = {
@@ -104,13 +126,16 @@ export function openBotStream(bot: { id: number; username: string }, signal: Abo
 }
 
 /**
- * Ends the open streams of these bots. The token is only checked when a stream opens, so this
- * runs when it stops being valid (a new token, a deleted bot or a banned owner) and when the
- * bot is renamed, so its mentions are matched against the new username.
+ * Ends the open streams of these bots, both bot API streams and /api/v1/stream opened with a bot
+ * token. The token is only checked when a stream opens, so this runs when it stops being valid
+ * (a new token, a deleted bot or a banned owner) and when the bot is renamed, so its mentions are
+ * matched against the new username.
  */
 export function closeBotStreams(botIds: number[]) {
 	const ids = new Set(botIds);
 	for (const client of [...botClients]) if (ids.has(client.botId)) client.close();
+	for (const client of [...clients])
+		if (client.botId !== null && ids.has(client.botId)) client.close();
 }
 
 /** Whether a post mentions this bot or replies to one of its posts. */

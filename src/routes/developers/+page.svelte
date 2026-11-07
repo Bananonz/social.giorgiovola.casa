@@ -8,7 +8,8 @@
 		messageShape,
 		nodeExample,
 		postShape,
-		pythonExample
+		pythonExample,
+		v1Groups
 	} from '#lib/botDocs.js';
 
 	let { data }: { data: PageData } = $props();
@@ -23,7 +24,8 @@
 		['objects', 'Objects'],
 		['endpoints', 'Endpoints'],
 		['realtime', 'Realtime'],
-		['examples', 'Examples']
+		['examples', 'Examples'],
+		['v1', 'Client API (v1)']
 	];
 	const statuses = [
 		['400', 'bad input'],
@@ -274,4 +276,35 @@
 	<pre class={codeClass}>{pythonExample(data.origin)}</pre>
 	<h3>Node.js</h3>
 	<pre class={codeClass}>{nodeExample(data.origin)}</pre>
+</section>
+
+<section id="v1" class={sectionClass}>
+	<h2>Client API (v1)</h2>
+	<p>
+		Everything the website does is also an API under
+		<code class={inlineCode}>{data.origin}/api/v1</code>, for apps, scripts and other clients. Sign
+		in with <code class={inlineCode}>POST /api/v1/auth/login</code> (or create a personal access
+		token in <a href="/settings">Settings</a>) and send the <code class={inlineCode}>sgu_</code>
+		token as a bearer token. Bot tokens work too. Every list answers
+		<code class={inlineCode}>{'{ "items": [...], "next_cursor": … }'}</code>, every error
+		<code class={inlineCode}>{'{ "error": "…" }'}</code>. Send
+		<code class={inlineCode}>Content-Type: application/json</code> on every write, even without a
+		body. The full reference, with bodies, responses, limits and events, is Part 1 of
+		<a href="/api.txt">/api.txt</a>.
+	</p>
+	{#each v1Groups as group (group.id)}
+		<h3 id={group.id}>{group.title}</h3>
+		<ul class="flex flex-col gap-1.5">
+			{#each group.endpoints as endpoint (endpoint.method + endpoint.path)}
+				<li class="flex flex-col rounded-md border border-line p-2 text-[0.9em]">
+					<span class="break-all">
+						<b class={methodColor(endpoint.method)}>{endpoint.method}</b>
+						<code>{endpoint.path}</code>
+						<span class="text-[0.85em] text-muted">· {endpoint.auth}</span>
+					</span>
+					<span class="opacity-80">{endpoint.summary.replaceAll('`', '')}</span>
+				</li>
+			{/each}
+		</ul>
+	{/each}
 </section>

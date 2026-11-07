@@ -1,17 +1,19 @@
 import type { PageServerLoad } from './$types';
-import { followedAuthors, getPosts, getTimeline, getTimelinePinned } from '#lib/server/posts.js';
-import { followedUsernames } from '#lib/server/follows.js';
-import { PAGE_SIZE, pageOffset } from '#lib/server/paging.js';
-import type { Actions, Cookies } from '@sveltejs/kit';
+import { isHttpError, type Cookies } from '@sveltejs/kit';
+import type { Page } from '#lib/api.js';
+import { apiGet } from '#lib/apiLoad.js';
+import type { Post } from '#lib/types.js';
 
 type Feed = 'all' | 'following';
+
+const PAGE_SIZE = 10;
 
 // the following feed is hidden for now: everyone gets "all", whatever their cookie or the url says
 const FOLLOWING_FEED_ENABLED = false;
 
-// the chosen feed is remembered in a cookie, so the home page opens on it next time
-function pickFeed(url: URL, cookies: Cookies, user: App.Locals['user']): Feed {
-	if (!user || !FOLLOWING_FEED_ENABLED) return 'all';
+// the chosen feed is remembered in a cookie (a UI preference), so the home page opens on it next time
+function pickFeed(url: URL, cookies: Cookies): Feed {
+	if (!FOLLOWING_FEED_ENABLED) return 'all';
 	const param = url.searchParams.get('feed');
 	if (param === 'all' || param === 'following') {
 		if (cookies.get('feed') !== param)
@@ -21,51 +23,38 @@ function pickFeed(url: URL, cookies: Cookies, user: App.Locals['user']): Feed {
 	return cookies.get('feed') === 'following' ? 'following' : 'all';
 }
 
-// "all" already has every post, so only the following feed brings in regiorgs. The posts staff
-// pinned to the timeline sit above both feeds, so they are left out of them
-function feedPosts(feed: Feed, loggedUser: App.Locals['user'], offset = 0) {
-	if (feed === 'following')
-		return getTimeline({
-			loggedUser,
-			authors: followedAuthors(loggedUser!.id),
-			excludeReplies: true,
-			excludeTimelinePinned: true,
-			limit: PAGE_SIZE,
-			offset
-		});
-	return getPosts({
-		loggedUser,
-		excludeReplies: true,
-		excludeTimelinePinned: true,
-		order: 'DESC',
-		limit: PAGE_SIZE,
-		offset
-	});
-}
+const timeline = (fetch: typeof globalThis.fetch, feed: Feed) =>
+	apiGet<Page<Post>>(fetch, `/timeline?feed=${feed}&limit=${PAGE_SIZE}`, { login: false });
 
-export const load = (async ({ locals, depends, url, cookies }) => {
+const signedOut = (e: unknown) => {
+	if (isHttpError(e, 401)) return null;
+	throw e;
+};
+
+export const load = (async ({ fetch, depends, url, cookies }) => {
 	depends('app:posts');
-
-	const feed = pickFeed(url, cookies, locals.user);
-	const [posts, pinned, following] = await Promise.all([
-		feedPosts(feed, locals.user),
-		getTimelinePinned(locals.user),
-		feed === 'following' ? followedUsernames(locals.user!.id) : null
+	// no await parent(): the layout's calls run alongside these instead of before them
+	let feed = pickFeed(url, cookies);
+	const [timelinePage, pinned, following] = await Promise.all([
+		// signed out, the following feed is a 401: show everything instead
+		timeline(fetch, feed).catch(signedOut),
+		apiGet<Page<Post>>(fetch, '/timeline/pinned'),
+		feed === 'following'
+			? apiGet<{ items: string[] }>(fetch, '/me/following', { login: false }).catch(signedOut)
+			: null
 	]);
-
+	let page = timelinePage;
+	if (!page) {
+		feed = 'all';
+		page = await timeline(fetch, feed);
+	}
 	return {
 		feed,
 		followingFeedEnabled: FOLLOWING_FEED_ENABLED,
-		posts,
-		pinned,
-		following
+		posts: page.items,
+		next: page.next_cursor,
+		source: `/api/v1/timeline?feed=${feed}&limit=${PAGE_SIZE}`,
+		pinned: pinned.items,
+		following: feed === 'following' ? following?.items ?? null : null
 	};
 }) satisfies PageServerLoad;
-
-export const actions = {
-	// infinite scroll; the Posts component posts to the current URL, feed param included
-	async default({ locals, request, url, cookies }) {
-		const feed = pickFeed(url, cookies, locals.user);
-		return { posts: await feedPosts(feed, locals.user, await pageOffset(request)) };
-	}
-} satisfies Actions;

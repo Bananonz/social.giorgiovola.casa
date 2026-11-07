@@ -1,24 +1,25 @@
 import type { PageServerLoad } from './$types';
 import { PUBLIC_URL } from '$app/env/public';
-import { MAX_BOTS, MAX_PROFILE_UPDATES } from '#lib/server/bots.js';
-import { LIMITS } from '#lib/server/validation.js';
+import { apiGet } from '#lib/apiLoad.js';
+
+type Limits = {
+	postContent: number;
+	messageContent: number;
+	name: number;
+	bio: number;
+	username: number;
+	maxBots: number;
+	maxProfileUpdates: number;
+	pollOptionsMin: number;
+	pollOptionsMax: number;
+	pollOption: number;
+	pollMinutesMin: number;
+	pollMinutesMax: number;
+	pollMinutesDefault: number;
+};
 
 // public: the docs are for people deciding whether to build a bot, who may not have an account
-export const load: PageServerLoad = ({ url }) => ({
+export const load: PageServerLoad = async ({ url, fetch }) => ({
 	origin: PUBLIC_URL ? new URL(PUBLIC_URL).origin : url.origin,
-	limits: {
-		postContent: LIMITS.postContent,
-		messageContent: LIMITS.messageContent,
-		name: LIMITS.name,
-		bio: LIMITS.bio,
-		username: LIMITS.username,
-		maxBots: MAX_BOTS,
-		maxProfileUpdates: MAX_PROFILE_UPDATES,
-		pollOptionsMin: LIMITS.pollOptionsMin,
-		pollOptionsMax: LIMITS.pollOptionsMax,
-		pollOption: LIMITS.pollOption,
-		pollMinutesMin: LIMITS.pollMinutesMin,
-		pollMinutesMax: LIMITS.pollMinutesMax,
-		pollMinutesDefault: LIMITS.pollMinutesDefault
-	}
+	limits: (await apiGet<{ limits: Limits }>(fetch, '/instance')).limits
 });

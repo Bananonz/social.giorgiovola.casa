@@ -1,13 +1,17 @@
 import { redirect } from '@sveltejs/kit';
-import { getGroup, toGroupChat } from '#lib/server/groups.js';
-import { parseId } from '#lib/server/validation.js';
 import type { PageServerLoad } from './$types';
+import { apiGet } from '#lib/apiLoad.js';
+import type { GroupChat } from '#lib/types.js';
 
-export const load = (async ({ locals, params, depends }) => {
-	if (!locals.user) redirect(303, '/login');
+export const load = (async ({ fetch, params, depends }) => {
 	depends('app:group');
-	const id = parseId(params.id);
-	const group = id === null ? null : await getGroup(id, locals.user.id);
+	const group = await apiGet<GroupChat & { muted: boolean }>(
+		fetch,
+		`/groups/${encodeURIComponent(params.id)}`,
+		{ optional: true }
+	);
 	if (!group) redirect(303, '/messages');
-	return { group: toGroupChat(group) };
+	return {
+		group: { id: group.id, name: group.name, owner: group.owner, members: group.members }
+	};
 }) satisfies PageServerLoad;

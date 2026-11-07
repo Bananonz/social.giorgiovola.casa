@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { errorOf } from '#lib/api.js';
 	import { afterNavigate } from '$app/navigation';
 	import Avatar from '#lib/components/Avatar.svelte';
 	import Button from '#lib/components/Button.svelte';
@@ -70,7 +71,7 @@
 	async function loadRecent() {
 		loadingRecent = true;
 		try {
-			const res = await fetch('/api/messages');
+			const res = await fetch('/api/v1/share-targets');
 			if (res.ok) ({ recent, groups } = await res.json());
 		} catch {
 			// the search still works without them
@@ -92,10 +93,10 @@
 		}
 		timer = setTimeout(async () => {
 			try {
-				const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+				const res = await fetch(`/api/v1/search/users?q=${encodeURIComponent(q)}`);
 				// a newer keystroke supersedes this response
 				if (!res.ok || current !== request) return;
-				const found: ChatPeer[] = await res.json();
+				const found: ChatPeer[] = (await res.json()).items;
 				results = found
 					.filter((u) => u.username !== $user?.username)
 					.map((peer) => ({ kind: 'user', peer }));
@@ -115,17 +116,17 @@
 		try {
 			const content = text ? `${text}\n${url}` : url;
 			const res = await fetch(
-				selected.kind === 'user' ? '/api/messages' : `/api/groups/${selected.group.id}/messages`,
+				selected.kind === 'user'
+					? `/api/v1/conversations/${selected.peer.username}/messages`
+					: `/api/v1/groups/${selected.group.id}/messages`,
 				{
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify(
-						selected.kind === 'user' ? { to: selected.peer.username, content } : { content }
-					)
+					body: JSON.stringify({ content })
 				}
 			);
 			if (!res.ok) {
-				error = (await res.text()) || 'Could not send the message';
+				error = (await errorOf(res)).message || 'Could not send the message';
 				return;
 			}
 			target.notify?.(`Sent to ${labelOf(selected)}!`);
