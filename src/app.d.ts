@@ -21,6 +21,10 @@ declare global {
 			muted: boolean;
 			/** why the account was muted, if a reason was given */
 			muteReason: string | null;
+			/** how the request was authenticated (see src/lib/server/auth.ts) */
+			auth: 'anonymous' | 'cookie' | 'token' | 'bot';
+			/** key (`sessions.token`) of the session or token in use, null for bots and anonymous */
+			sessionKey: string | null;
 		}
 		// interface PageData {}
 		// interface Platform {}
