@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import type { Page } from '#lib/api.js';
+import { allPages, type Page } from '#lib/api.js';
 import { apiGet } from '#lib/apiLoad.js';
 import type { Post } from '#lib/types.js';
 
@@ -17,9 +17,15 @@ export const load = (async ({ params, fetch }) => {
 		streamed: {
 			replies:
 				post.replies_count > 0
-					? apiGet<Page<Post>>(fetch, `/posts/${post.id}/replies?limit=${MAX_REPLIES}`, {
-							login: false
-					  }).then((page) => page.items)
+					? allPages((cursor) =>
+							apiGet<Page<Post>>(
+								fetch,
+								`/posts/${post.id}/replies?limit=${MAX_REPLIES}${
+									cursor ? `&cursor=${cursor}` : ''
+								}`,
+								{ login: false }
+							)
+					  )
 					: Promise.resolve([] as Post[])
 		}
 	};

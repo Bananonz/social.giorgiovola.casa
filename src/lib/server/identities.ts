@@ -2,6 +2,7 @@ import { and, asc, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { db, identity_members, sessions, users } from './db/index.js';
 import { fail, rateLimit } from './api.js';
+import { closeSessionStreams } from './realtime.js';
 import { MAX_IDENTITIES, MAX_MEMBERS, removeAvatarFiles } from './accounts.js';
 import { imagesOfPostTrees, removeUploads } from './images.js';
 import { isUniqueViolation, validateName, validateUsername } from './validation.js';
@@ -180,10 +181,13 @@ async function removeMember(identityId: number, accountId: number) {
 			and(eq(identity_members.identity_id, identityId), eq(identity_members.account_id, accountId))
 		)
 		.returning({ account_id: identity_members.account_id });
-	await db
+	const reset = await db
 		.update(sessions)
 		.set({ acting_id: null })
-		.where(and(eq(sessions.user_id, accountId), eq(sessions.acting_id, identityId)));
+		.where(and(eq(sessions.user_id, accountId), eq(sessions.acting_id, identityId)))
+		.returning({ token: sessions.token });
+	// streams are only authenticated when they open: end the ones still running as the identity
+	closeSessionStreams(reset.map((r) => r.token));
 	return removed.length > 0;
 }
 

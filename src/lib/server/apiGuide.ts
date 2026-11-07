@@ -81,7 +81,10 @@ Three kinds of token exist:
          or a personal access token made in the website's settings or with POST /auth/tokens.
   sgc_…  a bot token (see Part 2 for what bots are). Bots can use v1 too: they act as their
          own profile. Account endpoints (sessions, tokens, passkeys, password, identities,
-         bots, admin, push) answer 403 for bots.
+         bots, admin, push) answer 403 for bots. Bots keep the bot API's limits in v1: they
+         can't create, rename or add people to groups, remove others from one, or upload
+         images (403), post at most 20 a minute, and get 10 profile edits an hour
+         (name, username, bio, website, picture); 429 beyond that.
 Without a token you are anonymous: public reads work (posts, profiles, timelines), the rest
 answers 401. The website uses a session cookie instead; cookies only work on the website's
 own origin and never from other sites.
@@ -272,12 +275,14 @@ POST /auth/tokens                                              account
   current_password is missing, 403 when it is wrong (10 tries per 15 minutes).
 
 GET /auth/accounts                                             account
-  The account (website: every account signed in on the browser) with its identities:
+  The account (website: every account signed in on the browser; a token: its own account)
+  with its identities:
   { "items": [ { "id", "username", "name", "avatar", "unread", "unreadMessages",
   "active", "sharedBy": null, "identities": [ same fields, "sharedBy": "owner" | null ] } ] }
 POST /auth/switch                                              account
   { "username": "the account, or one of its identities, or one shared with it" }
-  Every later request with this token acts as that profile. 200: <Me>. 403 when you can't
+  Every later request with this token acts as that profile, and its open /stream is closed
+  (reconnect). 200: <Me>. 403 when you can't
   use that profile, 404 unknown username.
 
 ### You
@@ -424,7 +429,7 @@ POST /notifications/:id/read          marks one read → 204
 GET /conversations                    signed in → { "direct": [..], "groups": [..] }
 GET /conversations/recent             signed in → { "recent": [ { "kind": "user", "peer":
   User } | { "kind": "group", "group": {...} } ], "groups": [...] } (to share a post)
-GET /conversations/:username          signed in → { "peer": User, "block": { "me": you
+GET /conversations/:username          signed in ("recent" is a reserved username) → { "peer": User, "block": { "me": you
   blocked them, "peer": they blocked you }, "muted": false }
 GET /conversations/:username/messages signed in
   30 messages, OLDEST FIRST: the latest ones. For older history pass
@@ -521,6 +526,8 @@ GET /stream                           public or signed in
                                you were removed)
     typing          { "group_id": id | null, "user": { "username", "name" } }
   The stream follows the profile in use when it opened: reconnect after POST /auth/switch.
+  It is closed by the server when that happens, when the session is revoked, and when an
+  identity it acts as stops being shared with the account.
 
 GET /stream/bot                       bot tokens only
   The bot stream, same as /api/bot/stream (see Part 2): ready, mention, post, message,

@@ -36,9 +36,13 @@ export function parseId(value: unknown): number | null {
 	return n > 0 && n <= 2147483647 ? n : null;
 }
 
+// names that are fixed paths next to /conversations/:username, so a person can't take them
+const RESERVED_USERNAMES = new Set(['recent']);
+
 export function validateUsername(username: string): string | null {
 	if (!USERNAME_RE.test(username))
 		return 'Username must be 1-32 characters: lowercase letters, numbers and _ only.';
+	if (RESERVED_USERNAMES.has(username)) return 'That username is reserved.';
 	return null;
 }
 

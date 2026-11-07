@@ -100,6 +100,11 @@ export function requireUnmuted(locals: App.Locals): User {
 	return user;
 }
 
+/** Bots can't do this (it is account-level or human-only in the bot API too). */
+export function refuseBots(locals: App.Locals, message: string) {
+	if (locals.auth === 'bot') fail(403, message);
+}
+
 /** Mods and admins. Everyone else gets a 403. */
 export function requireStaff(locals: App.Locals) {
 	const account = requireAccount(locals);
@@ -206,10 +211,19 @@ export function idCursor(url: URL): number | null {
 /** Counts a hit on `key`, or throws a 429 when it is over `max` in the window. */
 export function rateLimit(key: string, max: number, windowMs = 60_000, message = 'Slow down') {
 	if (isLimited(key, max))
-		fail(429, `${message}, try again in a minute`, {
+		fail(429, `${message}, try again ${waitText(windowMs)}`, {
 			'Retry-After': String(Math.ceil(windowMs / 1000))
 		});
 	hit(key, windowMs);
+}
+
+/** "in a minute" / "in an hour": the window is the longest a client may have to wait. */
+function waitText(windowMs: number) {
+	const minutes = Math.ceil(windowMs / 60_000);
+	if (minutes <= 1) return 'in a minute';
+	if (minutes < 60) return `in ${minutes} minutes`;
+	const hours = Math.ceil(minutes / 60);
+	return hours === 1 ? 'in an hour' : `in ${hours} hours`;
 }
 
 // ---------------------------------------------------------------------------------------------

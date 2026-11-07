@@ -162,7 +162,9 @@ export async function authenticate(event: RequestEvent): Promise<Response | null
 	anonymous(locals);
 
 	const header = request.headers.get('authorization');
-	if (header && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/bot/')) {
+	// only our schemes count: another one (Basic auth from a proxy) is not ours to refuse
+	const isOurs = header !== null && /^(?:Bearer|Bot)(?: |$)/i.test(header);
+	if (isOurs && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/bot/')) {
 		const match = /^(?:Bearer|Bot) (\S+)$/i.exec(header);
 		const token = match?.[1] ?? '';
 		if (token.startsWith('sgc_')) {

@@ -1,6 +1,8 @@
 import type { RequestHandler } from './$types';
 import { fail, readJson, requireUser, stringField, v1 } from '#lib/server/api.js';
+import { MAX_PROFILE_UPDATES, PROFILE_WINDOW_MS, botLimited } from '#lib/server/bots.js';
 import { updateMe } from '#lib/server/login.js';
+import { closeBotStreams } from '#lib/server/realtime.js';
 import { meOf } from '#lib/server/me.js';
 
 /** The profile in use, the account behind it, moderation state and unread counts. */
@@ -26,6 +28,16 @@ export const PATCH: RequestHandler = v1(async ({ locals, request }) => {
 	if (Object.keys(changes).length === 0)
 		fail(400, `Nothing to update, send any of ${FIELDS.join(', ')}`);
 	if (locals.auth === 'bot' && changes.email !== undefined) fail(400, 'Bots have no email');
-	await updateMe(user, changes, stringField(body, 'current_password'));
+	// bots share the bot API's profile edit limit
+	if (
+		locals.auth === 'bot' &&
+		botLimited(user.id, 'profile', MAX_PROFILE_UPDATES, PROFILE_WINDOW_MS)
+	)
+		fail(429, 'Updating the profile too often', {
+			'Retry-After': String(PROFILE_WINDOW_MS / 1000)
+		});
+	const updated = await updateMe(user, changes, stringField(body, 'current_password'));
+	// a bot stream matches mentions against the username it was opened with
+	if (locals.auth === 'bot' && updated.username !== user.username) closeBotStreams([user.id]);
 	return meOf(locals);
 });

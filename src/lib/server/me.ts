@@ -6,6 +6,7 @@ import { fail } from './api.js';
 import { findSessionFor } from './accounts.js';
 import { unreadCounts } from './notifications.js';
 import { activateSession, setActing } from './session.js';
+import { closeSessionStreams } from './realtime.js';
 
 /**
  * The signed in profile as GET /api/v1/me shows it: the profile in use (`user`), the account
@@ -82,6 +83,8 @@ export async function switchProfile(locals: App.Locals, cookies: Cookies, userna
 	const found = await findSessionFor(own, target.id);
 	if (!found) fail(403, "You can't switch to that profile.");
 	await setActing(locals.sessionKey, found.actingId);
+	// the open stream is still bound to the old profile
+	closeSessionStreams([locals.sessionKey]);
 	return meOfSession(locals.accountId, found.actingId);
 }
 

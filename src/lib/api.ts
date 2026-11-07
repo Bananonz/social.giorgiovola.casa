@@ -19,6 +19,22 @@ export class ApiError extends Error {
 /** Every list of the API answers a page: follow `next_cursor` with `?cursor=` for the next one. */
 export type Page<T> = { items: T[]; next_cursor: string | null };
 
+/** Every item of a paged list: follows `next_cursor` until it ends (or `maxPages` pages). */
+export async function allPages<T>(
+	load: (cursor: string | null) => Promise<Page<T>>,
+	maxPages = 25
+): Promise<T[]> {
+	const items: T[] = [];
+	let cursor: string | null = null;
+	for (let i = 0; i < maxPages; i++) {
+		const page: Page<T> = await load(cursor);
+		items.push(...page.items);
+		if (!page.next_cursor) break;
+		cursor = page.next_cursor;
+	}
+	return items;
+}
+
 type Options = Omit<RequestInit, 'body'> & {
 	/** sent as JSON */
 	json?: unknown;

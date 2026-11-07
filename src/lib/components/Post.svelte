@@ -5,7 +5,7 @@
 	import Posts from './Posts.svelte';
 	import { page } from '$app/state';
 	import { afterNavigate, goto, invalidate } from '$app/navigation';
-	import { api, ApiError, errorOf, messageOf, type Page } from '#lib/api.js';
+	import { api, allPages, ApiError, errorOf, messageOf, type Page } from '#lib/api.js';
 	import Likes from './Likes.svelte';
 	import Avatar from './Avatar.svelte';
 	import PostComposer from './PostComposer.svelte';
@@ -156,7 +156,9 @@
 	);
 
 	async function fetchReplies(id: number): Promise<Post[]> {
-		return (await api<Page<Post>>(`posts/${id}/replies?limit=200`)).items;
+		return allPages((cursor) =>
+			api<Page<Post>>(`posts/${id}/replies?limit=200${cursor ? `&cursor=${cursor}` : ''}`)
+		);
 	}
 
 	async function deletePost() {
