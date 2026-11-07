@@ -6,6 +6,8 @@
 	import Button from './Button.svelte';
 	import Avatar from './Avatar.svelte';
 	import LoadingScreen from './LoadingScreen.svelte';
+	import UploadProgress from './UploadProgress.svelte';
+	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
 	import { user } from '#lib/store.js';
 	import { page } from '$app/state';
 
@@ -26,8 +28,6 @@
 	const MAX_IMAGES = 5;
 	const MAX_BYTES = 10 * 1024 * 1024;
 	const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
-
-	type Attachment = { file: File; url: string };
 
 	const MAX_POLL_OPTIONS = 4;
 	const MAX_POLL_OPTION = 80;
@@ -93,18 +93,26 @@
 				showError(`You can attach at most ${MAX_IMAGES} images.`);
 				break;
 			}
-			added.push({ file, url: URL.createObjectURL(file) });
+			// uploaded right away, so posting doesn't wait for it
+			const attachment = new Attachment(file);
+			attachment.done.catch((e) => {
+				// once it's part of a post, submit reports it
+				if (!attachments.includes(attachment)) return;
+				showError(e instanceof UploadError ? e.message : 'Could not upload the image.');
+				removeAttachment(attachment);
+			});
+			added.push(attachment);
 		}
 		if (added.length) attachments = [...attachments, ...added];
 	}
 
 	function removeAttachment(attachment: Attachment) {
-		URL.revokeObjectURL(attachment.url);
+		attachment.discard();
 		attachments = attachments.filter((a) => a !== attachment);
 	}
 
 	function clearAttachments() {
-		for (const a of attachments) URL.revokeObjectURL(a.url);
+		for (const a of attachments) a.discard();
 		attachments = [];
 	}
 
@@ -161,7 +169,7 @@
 			window.removeEventListener('drop', onDrop);
 			clearTimeout(errorTimeout);
 			clearAttachments();
-			for (const draft of pending) for (const a of draft.attachments) URL.revokeObjectURL(a.url);
+			for (const draft of pending) for (const a of draft.attachments) a.release();
 		};
 	});
 
@@ -183,42 +191,50 @@
 		error = null;
 		pending = [draft, ...pending];
 		const settle = () => (pending = pending.filter((p) => p.key !== draft.key));
-		try {
+		const send = async (fresh: boolean) => {
+			const uploads = await uploadIds(draft.attachments, fresh);
 			const body = new FormData();
 			body.set('content', draft.content);
 			if (replyTo !== null) body.set('reply_to', String(replyTo));
 			if (quoteOf) body.set('quote_of', String(quoteOf.id));
-			for (const { file } of draft.attachments) body.append('images', file);
+			for (const id of uploads) body.append('uploads', id);
 			if (draft.pollOptions) {
 				for (const option of draft.pollOptions) body.append('poll_options', option);
 				body.set('poll_minutes', String(draft.pollMinutes));
 			}
-
-			const res = await fetch('/api/posts', { method: 'POST', body });
+			return fetch('/api/posts', { method: 'POST', body });
+		};
+		try {
+			let res = await send(false);
+			// the server let the images expire (kept for a day, or lost on a restart): upload again
+			if (res.status === 410) res = await send(true);
 			if (res.ok) {
 				const post: Post = await res.json();
 				settle();
-				for (const a of draft.attachments) URL.revokeObjectURL(a.url);
+				for (const a of draft.attachments) a.release();
 				oncreated?.(post);
 				return;
-			} else if (res.status === 400 || res.status === 403) {
+			} else if (res.status === 400 || res.status === 403 || res.status === 410) {
 				showError(await res.text());
 			} else if (res.status === 413) {
 				showError('Images are too big.');
 			} else {
 				showError('Something went wrong.');
 			}
-		} catch {
-			showError('Something went wrong.');
+		} catch (e) {
+			showError(e instanceof UploadError ? e.message : 'Something went wrong.');
 		}
 		settle();
+		// a failed upload is dropped, it would only fail again
+		const kept = draft.attachments.filter((a) => !a.failed);
+		for (const a of draft.attachments) if (a.failed) a.discard();
 		// give back what didn't go out, unless something new was started meanwhile
 		if (!content.trim() && attachments.length === 0 && !pollOptions) {
 			content = draft.content;
-			attachments = draft.attachments;
+			attachments = kept;
 			pollOptions = draft.pollOptions;
 			pollMinutes = draft.pollMinutes;
-		} else for (const a of draft.attachments) URL.revokeObjectURL(a.url);
+		} else for (const a of kept) a.discard();
 	}
 </script>
 
@@ -318,6 +334,11 @@
 			{#each attachments as attachment (attachment.url)}
 				<div class="relative size-20 overflow-hidden rounded-[5px] border border-line">
 					<img class="size-full object-cover" src={attachment.url} alt="" />
+					{#if !attachment.id}
+						<div class="absolute inset-0 flex items-center justify-center bg-black/50">
+							<UploadProgress progress={attachment.progress} />
+						</div>
+					{/if}
 					<button
 						type="button"
 						title="Remove"
@@ -405,11 +426,14 @@
 			{#if draft.attachments.length > 0}
 				<div class="flex flex-wrap gap-2.5">
 					{#each draft.attachments as attachment (attachment.url)}
-						<img
-							class="size-20 rounded-[5px] border border-line object-cover"
-							src={attachment.url}
-							alt=""
-						/>
+						<div class="relative size-20 overflow-hidden rounded-[5px] border border-line">
+							<img class="size-full object-cover" src={attachment.url} alt="" />
+							{#if !attachment.id}
+								<div class="absolute inset-0 flex items-center justify-center bg-black/50">
+									<UploadProgress progress={attachment.progress} />
+								</div>
+							{/if}
+						</div>
 					{/each}
 				</div>
 			{/if}

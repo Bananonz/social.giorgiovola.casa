@@ -2,6 +2,8 @@
 	import { onMount, tick } from 'svelte';
 	import Avatar from './Avatar.svelte';
 	import LoadingScreen from './LoadingScreen.svelte';
+	import UploadProgress from './UploadProgress.svelte';
+	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
 	import QuoteCard from './QuoteCard.svelte';
 	import { onRealtime } from '#lib/realtime.js';
 	import { isMobile, user } from '#lib/store.js';
@@ -88,8 +90,6 @@
 	const MAX_IMAGES = 5;
 	const MAX_BYTES = 10 * 1024 * 1024;
 	const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
-
-	type Attachment = { file: File; url: string };
 
 	const threadUrl = groupId !== null ? `/api/groups/${groupId}` : `/api/messages/${peerUsername}`;
 	const sendUrl = groupId !== null ? `/api/groups/${groupId}/messages` : '/api/messages';
@@ -570,18 +570,26 @@
 				showError(`You can attach at most ${MAX_IMAGES} images.`);
 				break;
 			}
-			added.push({ file, url: URL.createObjectURL(file) });
+			// uploaded right away, so sending doesn't wait for it
+			const attachment = new Attachment(file);
+			attachment.done.catch((e) => {
+				// once it's part of a message, post reports it
+				if (!attachments.includes(attachment)) return;
+				showError(e instanceof UploadError ? e.message : 'Could not upload the image.');
+				removeAttachment(attachment);
+			});
+			added.push(attachment);
 		}
 		if (added.length) attachments = [...attachments, ...added];
 	}
 
 	function removeAttachment(attachment: Attachment) {
-		URL.revokeObjectURL(attachment.url);
+		attachment.discard();
 		attachments = attachments.filter((a) => a !== attachment);
 	}
 
 	function clearAttachments() {
-		for (const a of attachments) URL.revokeObjectURL(a.url);
+		for (const a of attachments) a.discard();
 		attachments = [];
 	}
 
@@ -623,35 +631,45 @@
 
 	async function post(draft: Draft, text: string, key: number) {
 		const settle = () => (pending = pending.filter((p) => p.key !== key));
-		try {
+		const send = async (fresh: boolean) => {
+			const uploads = await uploadIds(draft.attachments, fresh);
 			const body = new FormData();
 			if (groupId === null) body.set('to', peerUsername);
 			body.set('content', text);
 			if (draft.replyingTo) body.set('reply_to', String(draft.replyingTo.id));
-			for (const { file } of draft.attachments) body.append('images', file);
-			const res = await fetch(sendUrl, { method: 'POST', body });
+			for (const id of uploads) body.append('uploads', id);
+			return fetch(sendUrl, { method: 'POST', body });
+		};
+		try {
+			let res = await send(false);
+			// the server let the images expire (kept for a day, or lost on a restart): upload again
+			if (res.status === 410) res = await send(true);
 			if (res.ok) {
 				const message = await res.json();
 				settle();
 				// the pending bubble showed these until now
-				for (const a of draft.attachments) URL.revokeObjectURL(a.url);
+				for (const a of draft.attachments) a.release();
 				await add([message], true);
 				return;
 			}
 			showError(
-				res.status === 400 || res.status === 403 || res.status === 429
+				res.status === 400 || res.status === 403 || res.status === 410 || res.status === 429
 					? await res.text()
 					: res.status === 413
 					? 'Images are too big.'
 					: 'Something went wrong.'
 			);
-		} catch {
-			showError('Could not send the message, check your connection.');
+		} catch (e) {
+			showError(
+				e instanceof UploadError ? e.message : 'Could not send the message, check your connection.'
+			);
 		}
 		settle();
-		// give back what didn't go out, without overwriting what was typed since
+		// give back what didn't go out, without overwriting what was typed since. A failed upload is
+		// dropped, it would only fail again
 		if (!content.trim()) content = draft.content;
-		attachments = [...draft.attachments, ...attachments];
+		for (const a of draft.attachments) if (a.failed) a.discard();
+		attachments = [...draft.attachments.filter((a) => !a.failed), ...attachments];
 		if (!replyingTo && draft.replyingTo && messages.some((m) => m.id === draft.replyingTo?.id))
 			replyingTo = draft.replyingTo;
 	}
@@ -1278,14 +1296,23 @@
 					{#if draft.attachments.length}
 						<div class="grid gap-1.5 {draft.attachments.length > 1 ? 'grid-cols-2' : ''}">
 							{#each draft.attachments as attachment (attachment.url)}
-								<img
-									class="rounded-[5px] {draft.attachments.length > 1
-										? 'aspect-square w-full object-cover'
-										: 'max-h-[360px] max-w-full object-contain'}"
-									src={attachment.url}
-									alt=""
-									draggable="false"
-								/>
+								<div class="relative {draft.attachments.length > 1 ? '' : 'w-fit'}">
+									<img
+										class="rounded-[5px] {draft.attachments.length > 1
+											? 'aspect-square w-full object-cover'
+											: 'max-h-[360px] max-w-full object-contain'}"
+										src={attachment.url}
+										alt=""
+										draggable="false"
+									/>
+									{#if !attachment.id}
+										<div
+											class="absolute inset-0 flex items-center justify-center rounded-[5px] bg-black/50"
+										>
+											<UploadProgress progress={attachment.progress} />
+										</div>
+									{/if}
+								</div>
 							{/each}
 						</div>
 					{/if}
@@ -1315,6 +1342,11 @@
 			{#each attachments as attachment (attachment.url)}
 				<div class="relative size-16 overflow-hidden rounded-[5px] border border-line">
 					<img class="size-full object-cover" src={attachment.url} alt="" />
+					{#if !attachment.id}
+						<div class="absolute inset-0 flex items-center justify-center bg-black/50">
+							<UploadProgress progress={attachment.progress} />
+						</div>
+					{/if}
 					<button
 						type="button"
 						title="Remove"
