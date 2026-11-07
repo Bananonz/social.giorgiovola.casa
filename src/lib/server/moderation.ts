@@ -1,5 +1,5 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import { db, sessions, users } from './db/index.js';
+import { db, users } from './db/index.js';
 import { hit, isLimited } from './ratelimit.js';
 import { closeBotStreams } from './realtime.js';
 import { revokeAllSessions } from './session.js';

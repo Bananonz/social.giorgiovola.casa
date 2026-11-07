@@ -46,7 +46,12 @@ export const PATCH: RequestHandler = v1(async ({ locals, request }) => {
 			PROFILE_WINDOW_MS,
 			'Updating the profile too often'
 		);
-	const updated = await updateMe(user, changes, stringField(body, 'current_password'));
+	const updated = await updateMe(
+		user,
+		changes,
+		stringField(body, 'current_password'),
+		locals.sessionKey
+	);
 	// a bot stream matches mentions against the username it was opened with
 	if (locals.auth === 'bot' && updated.username !== user.username) closeBotStreams([user.id]);
 	return meOf(locals);

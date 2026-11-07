@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
-import { db, identity_members, sessions, users } from './db/index.js';
+import { db, identity_members, users } from './db/index.js';
 import { fail } from './api.js';
 import { hashPassword } from './password.js';
 import {

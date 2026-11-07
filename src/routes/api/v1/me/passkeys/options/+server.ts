@@ -10,6 +10,10 @@ import { registrationOptions } from '#lib/server/passkeyAuth.js';
  */
 export const POST: RequestHandler = v1(async ({ locals, cookies, url, request }) => {
 	const { accountId } = requireAccount(locals);
-	await checkCurrentPassword(accountId, stringField(await readJson(request), 'current_password'));
+	await checkCurrentPassword(
+		accountId,
+		stringField(await readJson(request), 'current_password'),
+		locals.sessionKey
+	);
 	return registrationOptions(accountId, cookies, url);
 });

@@ -9,7 +9,6 @@ import { clear, clientIp, hit, isLimited } from './ratelimit.js';
 import { TOKEN_DAYS, createSession, createToken, revokeOtherSessions } from './session.js';
 import { profileColumns, updateProfile } from './profile.js';
 import {
-	LIMITS,
 	isUniqueViolation,
 	validateEmail,
 	validateName,
@@ -22,6 +21,8 @@ import {
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILS_PER_ACCOUNT = 10;
 const MAX_FAILS_PER_IP = 30;
+// wrong current passwords across all of an account's sessions
+const MAX_FAILS_ACCOUNT_WIDE = 50;
 const GENERIC_ERROR = 'Wrong username or password.';
 
 /** Checks a username (or email) and password. Returns the account id, or throws the error. */
@@ -208,7 +209,8 @@ export async function accountProfile(accountId: number) {
 export async function updateMe(
 	me: User,
 	changes: { name?: string; username?: string; bio?: string; website?: string; email?: string },
-	currentPassword = ''
+	currentPassword = '',
+	sessionKey: string | null = null
 ) {
 	const { email, ...profile } = changes;
 	let cleanEmail: string | null = null;
@@ -221,7 +223,7 @@ export async function updateMe(
 		if (cleanEmail === me.email) cleanEmail = null;
 	}
 	if (cleanEmail !== null) {
-		await checkCurrentPassword(me.id, currentPassword);
+		await checkCurrentPassword(me.id, currentPassword, sessionKey);
 		const [taken] = await db
 			.select({ id: users.id })
 			.from(users)
@@ -251,19 +253,30 @@ export async function updateMe(
 /**
  * Re-checks the account's password before a sensitive change (a new password or email, a
  * personal access token), so a stolen session or token alone can't make its access stick.
- * Wrong guesses are rate limited per account.
+ * Wrong guesses are limited per session or token, so a stolen one can't lock the owner out, and
+ * across the whole account at a looser cap.
  */
-export async function checkCurrentPassword(accountId: number, current: string) {
+export async function checkCurrentPassword(
+	accountId: number,
+	current: string,
+	sessionKey: string | null
+) {
 	if (!current) fail(400, 'current_password is required for this change');
-	const key = `password:${accountId}`;
-	if (isLimited(key, MAX_FAILS_PER_ACCOUNT)) fail(429, 'Too many attempts, try again later.');
+	const sessionLimit = `password:${accountId}:${sessionKey ?? ''}`;
+	const accountLimit = `password:${accountId}`;
+	if (
+		isLimited(sessionLimit, MAX_FAILS_PER_ACCOUNT) ||
+		isLimited(accountLimit, MAX_FAILS_ACCOUNT_WIDE)
+	)
+		fail(429, 'Too many attempts, try again later.');
 	const [row] = await db
 		.select({ password: users.password, salt: users.salt })
 		.from(users)
 		.where(eq(users.id, accountId));
 	const { valid } = await verifyPassword(current, row?.salt ?? '', row?.password ?? '');
 	if (!valid) {
-		hit(key, WINDOW_MS);
+		hit(sessionLimit, WINDOW_MS);
+		hit(accountLimit, WINDOW_MS);
 		fail(403, 'The current password is wrong.');
 	}
 }
@@ -278,7 +291,7 @@ export async function changePassword(
 	next: string,
 	keepKey: string | null
 ) {
-	await checkCurrentPassword(accountId, current);
+	await checkCurrentPassword(accountId, current, keepKey);
 	const invalid = validatePassword(next);
 	if (invalid) fail(400, invalid);
 	const { salt, hash } = await hashPassword(next);

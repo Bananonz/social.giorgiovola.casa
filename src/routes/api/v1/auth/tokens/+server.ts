@@ -32,7 +32,7 @@ export const POST: RequestHandler = v1(async ({ locals, request }) => {
 		fail(400, `expires_in_days must be a whole number from 1 to ${MAX_DAYS}, or null`);
 
 	rateLimit(`tokens:${accountId}`, 10, 60_000, 'Too many tokens created');
-	await checkCurrentPassword(accountId, stringField(body, 'current_password'));
+	await checkCurrentPassword(accountId, stringField(body, 'current_password'), locals.sessionKey);
 	if ((await countPersonalTokens(accountId)) >= MAX_PERSONAL_TOKENS)
 		fail(400, `You can have at most ${MAX_PERSONAL_TOKENS} personal access tokens.`);
 	const { token, id, expires_at } = await createToken(accountId, {
