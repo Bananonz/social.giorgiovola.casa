@@ -11,8 +11,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 	const user = locals.user;
 	let id: number | null = null;
+	// optional state to set: without it the like toggles. the client always sends it, so a
+	// double tap (always a like) and quick repeated clicks can't flip it the wrong way
+	let wanted: boolean | undefined;
 	try {
-		id = parseId((await request.json())?.id);
+		const body = await request.json();
+		id = parseId(body?.id);
+		if (typeof body?.liked === 'boolean') wanted = body.liked;
 	} catch {
 		// invalid JSON, handled below
 	}
@@ -28,16 +33,18 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	if (!post) return new Response(null, { status: 404 });
 
 	const { liked, total } = await db.transaction(async (tx) => {
-		const res = await tx
-			.insert(likes)
-			.values({ user_id: user.id, post_id: postId })
-			.onConflictDoNothing({ target: [likes.user_id, likes.post_id] })
-			.returning();
-		let liked = true;
-		if (res.length === 0) {
-			// no action, delete like
+		let liked = wanted ?? true;
+		if (liked) {
+			const res = await tx
+				.insert(likes)
+				.values({ user_id: user.id, post_id: postId })
+				.onConflictDoNothing({ target: [likes.user_id, likes.post_id] })
+				.returning();
+			// already liked: a toggle takes it back, an explicit like leaves it
+			if (res.length === 0 && wanted === undefined) liked = false;
+		}
+		if (!liked) {
 			await tx.delete(likes).where(and(eq(likes.user_id, user.id), eq(likes.post_id, postId)));
-			liked = false;
 		}
 		const total = await tx.$count(likes, eq(likes.post_id, postId));
 		return { liked, total };
