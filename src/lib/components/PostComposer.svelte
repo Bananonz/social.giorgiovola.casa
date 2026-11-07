@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { errorOf } from '#lib/api.js';
 	import { onMount } from 'svelte';
 	import type { Post, QuotedPost } from '#lib/types.js';
 	import MentionInput from './MentionInput.svelte';
@@ -193,16 +194,19 @@
 		const settle = () => (pending = pending.filter((p) => p.key !== draft.key));
 		const send = async (fresh: boolean) => {
 			const uploads = await uploadIds(draft.attachments, fresh);
-			const body = new FormData();
-			body.set('content', draft.content);
-			if (replyTo !== null) body.set('reply_to', String(replyTo));
-			if (quoteOf) body.set('quote_of', String(quoteOf.id));
-			for (const id of uploads) body.append('uploads', id);
-			if (draft.pollOptions) {
-				for (const option of draft.pollOptions) body.append('poll_options', option);
-				body.set('poll_minutes', String(draft.pollMinutes));
-			}
-			return fetch('/api/posts', { method: 'POST', body });
+			return fetch('/api/v1/posts', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					content: draft.content,
+					reply_to: replyTo,
+					quote_of: quoteOf?.id ?? null,
+					uploads,
+					poll: draft.pollOptions
+						? { options: draft.pollOptions, duration_minutes: draft.pollMinutes }
+						: null
+				})
+			});
 		};
 		try {
 			let res = await send(false);
@@ -214,8 +218,13 @@
 				for (const a of draft.attachments) a.release();
 				oncreated?.(post);
 				return;
-			} else if (res.status === 400 || res.status === 403 || res.status === 410) {
-				showError(await res.text());
+			} else if (
+				res.status === 400 ||
+				res.status === 403 ||
+				res.status === 410 ||
+				res.status === 429
+			) {
+				showError((await errorOf(res)).message);
 			} else if (res.status === 413) {
 				showError('Images are too big.');
 			} else {

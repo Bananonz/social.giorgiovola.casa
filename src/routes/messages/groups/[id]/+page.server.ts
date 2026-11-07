@@ -1,20 +1,24 @@
 import { redirect } from '@sveltejs/kit';
-import { getGroup, getGroupThread, isGroupMuted, toGroupChat } from '#lib/server/groups.js';
-import { parseId } from '#lib/server/validation.js';
 import type { PageServerLoad } from './$types';
+import { apiGet } from '#lib/apiLoad.js';
+import type { GroupChat, GroupMessage } from '#lib/types.js';
 
 // Nothing is marked as read here: hover preloading runs this load before the page is opened.
-export const load = (async ({ locals, params, depends }) => {
-	if (!locals.user) redirect(303, '/login');
+export const load = (async ({ fetch, params, depends }) => {
 	depends('app:group');
-	const id = parseId(params.id);
-	const group = id === null ? null : await getGroup(id, locals.user.id);
-	// gone, or you were removed from it
-	if (!group) redirect(303, '/messages');
-
-	const [thread, muted] = await Promise.all([
-		getGroupThread(group.id),
-		isGroupMuted(group.id, locals.user.id)
+	const id = encodeURIComponent(params.id);
+	const [group, thread] = await Promise.all([
+		apiGet<GroupChat & { muted: boolean }>(fetch, `/groups/${id}`, { optional: true }),
+		apiGet<{ items: GroupMessage[]; next_cursor: string | null }>(fetch, `/groups/${id}/messages`, {
+			optional: true
+		})
 	]);
-	return { group: toGroupChat(group), thread, muted };
+	// gone, or you were removed from it
+	if (!group || !thread) redirect(303, '/messages');
+	const { muted, ...info } = group;
+	return {
+		group: info,
+		thread: { messages: thread.items, hasMore: thread.next_cursor !== null },
+		muted
+	};
 }) satisfies PageServerLoad;

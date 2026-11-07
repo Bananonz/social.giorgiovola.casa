@@ -91,5 +91,5 @@
 {/if}
 
 {#key data.feed}
-	<Posts shouldLoadMore {posts} />
+	<Posts source={data.source} next={data.next} {posts} />
 {/key}

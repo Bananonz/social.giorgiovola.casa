@@ -35,10 +35,10 @@
 		}
 		timer = setTimeout(async () => {
 			try {
-				const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+				const res = await fetch(`/api/v1/search/users?q=${encodeURIComponent(q)}`);
 				// a newer keystroke supersedes this response
 				if (!res.ok || current !== request) return;
-				results = await res.json();
+				results = (await res.json()).items;
 			} catch {
 				results = [];
 			}

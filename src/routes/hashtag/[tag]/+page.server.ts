@@ -1,37 +1,18 @@
-import type { Actions, PageServerLoad } from './$types';
-import { error } from '@sveltejs/kit';
-import { normalizeTag, parseHashtag } from '#lib/hashtags.js';
-import { getPosts } from '#lib/server/posts.js';
-import { PAGE_SIZE, pageOffset } from '#lib/server/paging.js';
-import { hashtagPosts } from '#lib/server/search.js';
+import type { PageServerLoad } from './$types';
+import type { Page } from '#lib/api.js';
+import { apiGet } from '#lib/apiLoad.js';
+import type { Post } from '#lib/types.js';
 
-/** The normalized tag of the URL, or a 404 when it isn't a hashtag. */
-function tagOf(param: string) {
-	const parsed = parseHashtag('#' + param);
-	if (!parsed || parsed.rest) error(404, 'Not a hashtag');
-	return normalizeTag(parsed.tag);
-}
+const PAGE_SIZE = 10;
 
-export const load = (async ({ params, locals, depends }) => {
+export const load = (async ({ params, fetch, depends }) => {
 	depends('app:posts');
-	const tag = tagOf(params.tag);
-	const [posts, count] = await Promise.all([
-		getPosts({ loggedUser: locals.user, hashtag: tag, order: 'DESC', limit: PAGE_SIZE }),
-		hashtagPosts(tag)
-	]);
-	return { tag, posts, count };
+	const info = await apiGet<{ tag: string; posts: number }>(
+		fetch,
+		`/hashtags/${encodeURIComponent(params.tag)}`,
+		{ login: false }
+	);
+	const source = `/api/v1/hashtags/${encodeURIComponent(info.tag)}/posts?limit=${PAGE_SIZE}`;
+	const page = await apiGet<Page<Post>>(fetch, source.slice('/api/v1'.length), { login: false });
+	return { tag: info.tag, count: info.posts, posts: page.items, next: page.next_cursor, source };
 }) satisfies PageServerLoad;
-
-export const actions = {
-	// infinite scroll
-	async default({ params, locals, request }) {
-		const posts = await getPosts({
-			loggedUser: locals.user,
-			hashtag: tagOf(params.tag),
-			order: 'DESC',
-			limit: PAGE_SIZE,
-			offset: await pageOffset(request)
-		});
-		return { posts };
-	}
-} satisfies Actions;

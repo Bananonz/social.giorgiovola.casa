@@ -1,61 +1,117 @@
 <script lang="ts">
 	import Button from '#lib/components/Button.svelte';
-	import type { ActionData, PageData } from './$types';
+	import type { PageProps } from './$types';
 	import type { SwitcherAccount, SwitcherProfile } from '#lib/types.js';
 	import Avatar from '#lib/components/Avatar.svelte';
 	import UnreadBadges from '#lib/components/UnreadBadges.svelte';
+	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
+	import { api, messageOf } from '#lib/api.js';
+	import { switchTo } from '#lib/accounts.js';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { data }: PageProps = $props();
 
 	const sectionClass = 'mb-10 flex flex-col gap-3';
 	const hintClass = 'text-[0.85em] text-muted';
 	const rowClass = 'flex flex-col gap-2.5 rounded-md border p-2';
 
 	let accounts = $derived(data.accounts as SwitcherAccount[]);
-	// keeps what was typed when creating an identity fails
-	let values = $derived(
-		(form && 'values' in form ? form.values : null) as { name: string; username: string } | null
-	);
+	let error = $state<string | null>(null);
+	let busy = $state(false);
 	let current = $derived(accounts.find((a) => a.active || a.identities.some((i) => i.active)));
 	let others = $derived(accounts.filter((a) => a !== current));
 	let owned = $derived(current?.identities.filter((i) => !i.sharedBy).length ?? 0);
 	let canCreate = $derived(!!current && owned < data.maxIdentities);
 	// a failed share keeps its form open with what was typed
-	let shareFailed = $derived(
-		(form && 'shareId' in form ? form : null) as {
-			error: string;
-			shareId: number;
-			username: string;
-		} | null
-	);
-	let sharing = $state<number | null>(null);
-	let shareOpen = $derived(sharing ?? shareFailed?.shareId ?? null);
+	let shareError = $state<{ id: number; error: string } | null>(null);
+	let shareOpen = $state<number | null>(null);
 
 	const membersOf = (profile: SwitcherProfile) =>
-		data.members.filter((m) => m.identity_id === profile.id);
+		data.owned.find((o) => o.username === profile.username)?.members ?? [];
 
-	const confirmDelete = (profile: SwitcherProfile) => (e: SubmitEvent) => {
+	/** Runs an API call; the page reloads its data afterwards, or shows the error. */
+	async function run(action: () => Promise<unknown>) {
+		busy = true;
+		error = null;
+		try {
+			await action();
+			await invalidateAll();
+		} catch (e) {
+			error = messageOf(e);
+		} finally {
+			busy = false;
+		}
+	}
+
+	function deleteIdentity(profile: SwitcherProfile) {
 		const ok = confirm(
 			`Delete @${profile.username}? Its posts, likes and notifications will be deleted too. This can't be undone.`
 		);
-		if (!ok) e.preventDefault();
-	};
+		if (ok) run(() => api(`me/identities/${profile.username}`, { method: 'DELETE' }));
+	}
 
-	const confirmLeave = (profile: SwitcherProfile) => (e: SubmitEvent) => {
+	function leave(profile: SwitcherProfile) {
 		const ok = confirm(
 			`Stop using @${profile.username}? You will need @${profile.sharedBy} to share it again.`
 		);
-		if (!ok) e.preventDefault();
-	};
+		if (ok) run(() => api(`me/identities/${profile.username}/leave`, { method: 'POST' }));
+	}
 
-	const confirmUnshare = (profile: SwitcherProfile, username: string) => (e: SubmitEvent) => {
-		if (!confirm(`Stop sharing @${profile.username} with @${username}?`)) e.preventDefault();
-	};
+	function unshare(profile: SwitcherProfile, username: string) {
+		if (confirm(`Stop sharing @${profile.username} with @${username}?`))
+			run(() => api(`me/identities/${profile.username}/members/${username}`, { method: 'DELETE' }));
+	}
+
+	async function share(e: SubmitEvent, profile: SwitcherProfile) {
+		e.preventDefault();
+		const form = e.currentTarget as HTMLFormElement;
+		const username = String(new FormData(form).get('username') ?? '');
+		busy = true;
+		try {
+			await api(`me/identities/${profile.username}/members`, {
+				method: 'POST',
+				json: { username }
+			});
+			shareError = null;
+			form.reset();
+			await invalidateAll();
+		} catch (err) {
+			shareError = { id: profile.id, error: messageOf(err) };
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function create(e: SubmitEvent) {
+		e.preventDefault();
+		const form = new FormData(e.currentTarget as HTMLFormElement);
+		busy = true;
+		error = null;
+		try {
+			const identity = await api<{ username: string }>('me/identities', {
+				method: 'POST',
+				json: { name: form.get('fullName'), username: form.get('username') }
+			});
+			await switchTo(identity.username, `/@${identity.username}`);
+		} catch (err) {
+			error = messageOf(err);
+			busy = false;
+		}
+	}
+
+	async function switchProfile(username: string, redirectTo: string) {
+		busy = true;
+		try {
+			await switchTo(username, redirectTo);
+		} catch (err) {
+			error = messageOf(err);
+			busy = false;
+		}
+	}
 </script>
 
-{#if form && 'error' in form && form.error && !shareFailed}
-	<p class="mb-5 rounded-[5px] bg-danger p-[5px]">{form.error}</p>
+{#if error}
+	<p class="mb-5 rounded-[5px] bg-danger p-[5px]">{error}</p>
 {/if}
 
 {#if current}
@@ -93,29 +149,30 @@
 							{#if profile.active}
 								<span class="text-[0.8em] text-accent">in use</span>
 							{:else}
-								<form method="POST" action="?/switch">
-									<input type="hidden" name="id" value={profile.id} />
-									<input type="hidden" name="redirectTo" value={page.url.pathname} />
-									<Button type="submit" size="sm">Switch</Button>
-								</form>
+								<Button
+									size="sm"
+									disabled={busy}
+									onclick={() => switchProfile(profile.username, page.url.pathname)}>Switch</Button
+								>
 							{/if}
 							{#if profile.sharedBy}
-								<form method="POST" action="?/leave" onsubmit={confirmLeave(profile)}>
-									<input type="hidden" name="id" value={profile.id} />
-									<Button variant="danger" type="submit" size="sm">Leave</Button>
-								</form>
+								<Button variant="danger" size="sm" disabled={busy} onclick={() => leave(profile)}
+									>Leave</Button
+								>
 							{:else if profile !== current}
 								<Button
 									size="sm"
 									variant={shareOpen === profile.id ? 'primary' : 'default'}
 									aria-expanded={shareOpen === profile.id}
-									onclick={() => (sharing = shareOpen === profile.id ? -1 : profile.id)}
+									onclick={() => (shareOpen = shareOpen === profile.id ? null : profile.id)}
 									>Share</Button
 								>
-								<form method="POST" action="?/delete" onsubmit={confirmDelete(profile)}>
-									<input type="hidden" name="id" value={profile.id} />
-									<Button variant="danger" type="submit" size="sm">Delete</Button>
-								</form>
+								<Button
+									variant="danger"
+									size="sm"
+									disabled={busy}
+									onclick={() => deleteIdentity(profile)}>Delete</Button
+								>
 							{/if}
 						</div>
 					</div>
@@ -128,31 +185,31 @@
 							</p>
 							{#if members.length > 0}
 								<ul class="flex flex-col gap-1.5">
-									{#each members as member (member.id)}
+									{#each members as member (member.username)}
 										<li class="flex items-center gap-2.5">
 											<Avatar user={member} size={24} />
 											<a class="min-w-0 flex-1 truncate text-[0.9em]" href={'/@' + member.username}
 												>{member.name} <span class="opacity-70">@{member.username}</span></a
 											>
-											<form
-												method="POST"
-												action="?/unshare"
-												onsubmit={confirmUnshare(profile, member.username)}
+											<Button
+												variant="danger"
+												size="sm"
+												disabled={busy}
+												onclick={() => unshare(profile, member.username)}>Remove</Button
 											>
-												<input type="hidden" name="id" value={profile.id} />
-												<input type="hidden" name="account" value={member.id} />
-												<Button variant="danger" type="submit" size="sm">Remove</Button>
-											</form>
 										</li>
 									{/each}
 								</ul>
 							{/if}
-							{#if shareFailed?.shareId === profile.id}
-								<p class="rounded-[5px] bg-danger p-[5px]">{shareFailed.error}</p>
+							{#if shareError?.id === profile.id}
+								<p class="rounded-[5px] bg-danger p-[5px]">{shareError.error}</p>
 							{/if}
 							{#if members.length < data.maxMembers}
-								<form method="POST" action="?/share" class="flex items-center gap-2.5">
-									<input type="hidden" name="id" value={profile.id} />
+								<form
+									method="POST"
+									class="flex items-center gap-2.5"
+									onsubmit={(e) => share(e, profile)}
+								>
 									<input
 										class="input min-w-0 flex-1"
 										type="text"
@@ -160,10 +217,9 @@
 										placeholder="Username of an account"
 										maxlength="33"
 										autocomplete="off"
-										value={shareFailed?.shareId === profile.id ? shareFailed.username : ''}
 										required
 									/>
-									<Button type="submit" size="sm">Share</Button>
+									<Button type="submit" size="sm" disabled={busy}>Share</Button>
 								</form>
 							{:else}
 								<p class={hintClass}>
@@ -177,7 +233,7 @@
 		</ul>
 
 		{#if canCreate}
-			<form method="POST" action="?/create" class="mt-2.5 flex flex-col gap-3">
+			<form method="POST" class="mt-2.5 flex flex-col gap-3" onsubmit={create}>
 				<h3>New identity</h3>
 				<input
 					class="input"
@@ -185,7 +241,6 @@
 					name="fullName"
 					placeholder="Display name"
 					maxlength="64"
-					value={values?.name ?? ''}
 					required
 				/>
 				<input
@@ -195,10 +250,9 @@
 					placeholder="Username (a-z, 0-9, _)"
 					pattern={'[a-zA-Z0-9_]{1,32}'}
 					maxlength="32"
-					value={values?.username ?? ''}
 					required
 				/>
-				<Button class="self-start" type="submit">Create and switch</Button>
+				<Button class="self-start" type="submit" disabled={busy}>Create and switch</Button>
 			</form>
 		{:else}
 			<p class={hintClass}>You reached the limit of {data.maxIdentities} identities.</p>
@@ -231,11 +285,11 @@
 							</span>
 						</div>
 						<UnreadBadges {notifications} {messages} />
-						<form method="POST" action="?/switch">
-							<input type="hidden" name="id" value={account.id} />
-							<input type="hidden" name="redirectTo" value="/accounts" />
-							<Button type="submit" size="sm">Switch</Button>
-						</form>
+						<Button
+							size="sm"
+							disabled={busy}
+							onclick={() => switchProfile(account.username, '/accounts')}>Switch</Button
+						>
 					</div>
 				</li>
 			{/each}

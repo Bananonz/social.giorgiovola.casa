@@ -7,10 +7,29 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { disablePush, enablePush, getPushState, PushError, type PushState } from '#lib/push.js';
+	import { api, withCursor, type Page } from '#lib/api.js';
 	let { data }: { data: PageData } = $props();
 
 	// reassignable so read state can be updated locally until the next load
 	let notifications = $derived(data.notifications);
+	// writable derived: the cursor of the next page, reset by every load
+	let next = $derived(data.next);
+	let loadingMore = $state(false);
+
+	async function loadMore() {
+		if (!next || loadingMore) return;
+		loadingMore = true;
+		try {
+			const page = await api<Page<Notification>>(withCursor(data.source, next));
+			const seen = new Set(notifications.map((n) => n.id));
+			notifications = [...notifications, ...page.items.filter((n) => !seen.has(n.id))];
+			next = page.next_cursor;
+		} catch {
+			// the button stays, so it can be tried again
+		} finally {
+			loadingMore = false;
+		}
+	}
 	let push: PushState | null = $state(null);
 	let pushBusy = $state(false);
 	let pushError: 'unavailable' | 'failed' | null = $state(null);
@@ -39,9 +58,7 @@
 
 	const readNotification = async (notification: Notification, redirect = true) => {
 		if (notification.read_at === null) {
-			fetch(`/api/notifications/${notification.id}/read`, {
-				method: 'POST'
-			});
+			api(`notifications/${notification.id}/read`, { method: 'POST' }).catch(() => {});
 			$notisCount -= 1;
 
 			if (!redirect) {
@@ -66,8 +83,11 @@
 	};
 
 	const readAll = async () => {
-		const res = await fetch('/api/notifications/read', { method: 'POST' });
-		if (!res.ok) return;
+		try {
+			await api('notifications/read', { method: 'POST' });
+		} catch {
+			return;
+		}
 		$notisCount = 0;
 		const now = new Date();
 		notifications = notifications.map((not) => (not.read_at ? not : { ...not, read_at: now }));
@@ -210,12 +230,14 @@
 					></Button
 				>
 			{/if}
-			<!-- {#if notification.read_at === null}
-				<form method="post" use:enhance>
-					<input type="hidden" name="id" value={notification.id} />
-					<button type="submit">Mark as read</button>
-				</form>
-			{/if} -->
 		</div>
 	{/each}
 </div>
+
+{#if next}
+	<div class="mt-5 flex justify-center">
+		<Button onclick={loadMore} disabled={loadingMore}
+			>{loadingMore ? 'Loading...' : 'Load more'}</Button
+		>
+	</div>
+{/if}

@@ -2,13 +2,16 @@
 	import Post from '#lib/components/Post.svelte';
 	import type { Post as PostType } from '#lib/types.js';
 	import { tick, untrack } from 'svelte';
-	import { deserialize } from '$app/forms';
+	import { api, withCursor, type Page } from '#lib/api.js';
 	import { snapshot } from '$app/navigation';
 	import { onRealtime } from '#lib/realtime.js';
 
 	type Props = {
 		posts: PostType[];
-		shouldLoadMore?: boolean;
+		/** the API list `posts` is the first page of: the infinite scroll continues it */
+		source?: string | null;
+		/** the cursor of the next page, null when there is none */
+		next?: string | null;
 		loadReplies?: boolean;
 		scrollToNew?: boolean;
 		replies?: boolean;
@@ -18,7 +21,8 @@
 
 	let {
 		posts,
-		shouldLoadMore = false,
+		source = null,
+		next = null,
 		loadReplies = false,
 		scrollToNew = false,
 		replies = false,
@@ -30,7 +34,7 @@
 	type Anchor = { key: string; top: number };
 	type Saved = {
 		posts: PostType[];
-		page: number;
+		cursor: string | null;
 		done: boolean;
 		removed: number[];
 		anchor: Anchor | null;
@@ -40,9 +44,10 @@
 	// prepended there doesn't drop them
 	let older: PostType[] = $state([]);
 	let removed: number[] = $state([]);
-	let currentPage = 0;
+	const shouldLoadMore = untrack(() => !!source);
+	let cursor = untrack(() => next);
 	let loading = $state(false);
-	let done = $state(false);
+	let done = $state(untrack(() => next === null));
 	let listElement: HTMLDivElement;
 	let sentinel: HTMLDivElement | undefined = $state();
 
@@ -87,16 +92,12 @@
 		if (loading || done) return;
 		loading = true;
 		try {
-			const formData = new FormData();
-			formData.set('currentPage', (currentPage + 1).toString());
-			const res = await fetch('', { method: 'POST', body: formData });
-			if (!res.ok) return;
-			const data = deserialize(await res.text());
-			if (data.type !== 'success' || !data.data) return;
-			const page = data.data.posts as PostType[];
-			currentPage++;
-			if (page.length === 0) done = true;
-			else older.push(...page);
+			const page = await api<Page<PostType>>(withCursor(source!, cursor!));
+			older.push(...page.items);
+			cursor = page.next_cursor;
+			if (cursor === null) done = true;
+		} catch {
+			// tried again when the end of the list comes into view again
 		} finally {
 			loading = false;
 		}
@@ -151,19 +152,19 @@
 	// back from a post: the server only sends the first page again, so bring back the pages
 	// loaded before and the post that was at the top of the screen (the prop never changes on a
 	// mounted list)
-	if (untrack(() => shouldLoadMore))
+	if (shouldLoadMore)
 		snapshot<Saved>({
 			id: 'timeline',
 			capture: () => ({
 				posts: $state.snapshot(list),
-				page: currentPage,
+				cursor,
 				done,
 				removed: $state.snapshot(removed),
 				anchor: captureAnchor()
 			}),
 			restore: async (saved) => {
 				older = saved.posts;
-				currentPage = saved.page;
+				cursor = saved.cursor;
 				done = saved.done;
 				removed = saved.removed;
 				if (!saved.anchor) return;

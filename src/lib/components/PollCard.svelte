@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { errorOf } from '#lib/api.js';
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import Button from './Button.svelte';
@@ -53,8 +54,8 @@
 		sending = true;
 		error = null;
 		try {
-			const res = await fetch(`/api/posts/${postId}/vote`, {
-				method: 'POST',
+			const res = await fetch(`/api/v1/posts/${postId}/vote`, {
+				method: 'PUT',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ option })
 			});
@@ -64,7 +65,7 @@
 				// absolute counts, like likes: the realtime event may arrive first
 				votes = data.votes;
 			} else {
-				error = (await res.text()) || 'Could not vote';
+				error = (await errorOf(res)).message || 'Could not vote';
 			}
 		} catch {
 			error = 'Could not vote';

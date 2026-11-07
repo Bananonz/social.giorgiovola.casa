@@ -4,7 +4,9 @@
 	import Posts from '#lib/components/Posts.svelte';
 	import Post from '#lib/components/Post.svelte';
 	import { user } from '#lib/store.js';
-	import { goto } from '$app/navigation';
+	import { goto, invalidateAll } from '$app/navigation';
+	import { api, messageOf } from '#lib/api.js';
+	import { userOf, type Me } from '#lib/me.js';
 	import Avatar from '#lib/components/Avatar.svelte';
 	import ModerationControls from '#lib/components/ModerationControls.svelte';
 	import { getAvatar, websiteLabel } from '#lib/utils.js';
@@ -41,76 +43,82 @@
 	});
 
 	// identities have no email or password of their own
-	let identity = $derived(profile.owner_id !== null);
+	let identity = $derived(!!$user && $user.owner_id !== null);
 
 	async function toggleFollow() {
 		followBusy = true;
 		try {
-			const res = await fetch(`/api/users/${profile.username}/follow`, {
-				method: follow.followed ? 'DELETE' : 'POST'
+			follow = await api(`users/${profile.username}/follow`, {
+				method: follow.followed ? 'DELETE' : 'PUT'
 			});
-			if (!res.ok) {
-				error = (await res.text()) || 'Could not update follow';
-				return;
-			}
-			follow = await res.json();
 			error = null;
+		} catch (e) {
+			error = messageOf(e, 'Could not update follow');
 		} finally {
 			followBusy = false;
 		}
 	}
 
+	async function logout() {
+		try {
+			await api('auth/logout', { method: 'POST' });
+		} catch {
+			// signed out already
+		}
+		// the realtime stream and the whole page belong to the account that was signed in
+		location.href = '/';
+	}
+
 	async function updateUser(e: SubmitEvent) {
 		e.preventDefault();
-		const target = e.target as HTMLFormElement;
-
-		const form = new FormData(target);
-
+		const form = new FormData(e.target as HTMLFormElement);
+		const field = (name: string) => String(form.get(name) ?? '');
 		const avatar = form.get('avatar') as File;
 
 		if (avatar.size > 1024 * 1024 * 10) {
 			error = 'Avatar too big, max size is 10mb';
 			return;
 		}
-
-		if (!form.get('fullName') || !form.get('username') || (!identity && !form.get('email'))) {
-			return;
-		}
-
-		if (form.get('password')) {
-			if (form.get('password') !== form.get('confirmPassword')) {
+		if (!field('fullName') || !field('username') || (!identity && !field('email'))) return;
+		if (field('password')) {
+			if (field('password') !== field('confirmPassword')) {
 				error = 'Passwords do not match';
+				return;
+			}
+			if (!field('currentPassword')) {
+				error = 'Enter your current password to change it';
 				return;
 			}
 		}
 
-		const res = await fetch('/api/user', {
-			method: 'PATCH',
-			body: form
-		});
-
-		if (!res.ok) {
-			error = await res.text();
-			return;
-		}
-
-		const newUser = await res.json();
-		let redirect = false;
-
-		if (profile.username !== newUser.username) {
-			redirect = true;
-		}
-
-		profile = newUser;
-		$user = newUser;
-
-		editing = false;
-		error = null;
-
-		if (redirect) {
-			goto(`/@${newUser.username}`);
-		} else {
-			location.reload();
+		try {
+			if (avatar.size > 0) {
+				const upload = new FormData();
+				upload.set('avatar', avatar);
+				await api('me/avatar', { method: 'PUT', body: upload });
+			}
+			const me = await api<Me>('me', {
+				method: 'PATCH',
+				json: {
+					name: field('fullName'),
+					username: field('username'),
+					bio: field('bio'),
+					website: field('website'),
+					...(identity ? {} : { email: field('email') })
+				}
+			});
+			if (field('password'))
+				await api('me/password', {
+					method: 'PUT',
+					json: { current_password: field('currentPassword'), password: field('password') }
+				});
+			$user = userOf(me);
+			editing = false;
+			error = null;
+			if (me.user.username !== profile.username) await goto(`/@${me.user.username}`);
+			else await invalidateAll();
+		} catch (e) {
+			error = messageOf(e, 'Could not save your profile');
 		}
 	}
 </script>
@@ -180,7 +188,7 @@
 				</a>
 			{/if}
 		</div>
-		{#if $user && $user.id === profile.id}
+		{#if $user && data.self}
 			<div class="flex gap-2.5 self-center justify-self-end [grid-area:actions] sm:self-start">
 				<Button
 					size="sm"
@@ -188,9 +196,7 @@
 						editing = true;
 					}}>Edit</Button
 				>
-				<form method="POST" action="/logout?/current">
-					<Button type="submit" variant="danger" size="sm">Logout</Button>
-				</form>
+				<Button variant="danger" size="sm" onclick={logout}>Logout</Button>
 			</div>
 		{:else if $user}
 			<div class="flex gap-2.5 self-center justify-self-end [grid-area:actions] sm:self-start">
@@ -275,7 +281,7 @@
 						placeholder="social@giorgiovola.casa"
 						name="email"
 						type="email"
-						value={profile.email}
+						value={$user?.email}
 						required
 					/>
 				</div>
@@ -284,8 +290,22 @@
 					<input
 						class="border-b border-[#ccc] outline-none"
 						placeholder="G1*rg!07"
+						id="password"
 						name="password"
 						type="password"
+						autocomplete="new-password"
+					/>
+				</div>
+				<div class="flex flex-col">
+					<label class="text-[0.8em] opacity-80" for="currentPassword"
+						>Current password (to change it)</label
+					>
+					<input
+						class="border-b border-[#ccc] outline-none"
+						id="currentPassword"
+						name="currentPassword"
+						type="password"
+						autocomplete="current-password"
 					/>
 				</div>
 				<div class="flex flex-col">
@@ -349,5 +369,10 @@
 	</p>
 {/if}
 {#key profile}
-	<Posts shouldLoadMore showReplyTo={data.tab === 'replies'} posts={data.posts} />
+	<Posts
+		source={data.source}
+		next={data.next}
+		showReplyTo={data.tab === 'replies'}
+		posts={data.posts}
+	/>
 {/key}

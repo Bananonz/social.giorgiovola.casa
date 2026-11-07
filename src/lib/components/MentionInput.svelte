@@ -94,10 +94,10 @@
 			return;
 		}
 		try {
-			const res = await fetch(`/api/users/search?q=${encodeURIComponent(query.toLowerCase())}`);
+			const res = await fetch(`/api/v1/search/users?q=${encodeURIComponent(query.toLowerCase())}`);
 			// a newer keystroke (or closing) supersedes this response
 			if (!res.ok || current !== request) return;
-			suggestions = await res.json();
+			suggestions = (await res.json()).items;
 			active = 0;
 		} catch {
 			// autocomplete is a nicety, typing must keep working

@@ -8,6 +8,7 @@
 	import { user } from '#lib/store.js';
 	import type { ChatPeer } from '#lib/types.js';
 	import type { PageProps } from './$types';
+	import { errorOf } from '#lib/api.js';
 
 	let { data }: PageProps = $props();
 
@@ -18,7 +19,7 @@
 	type Init = NonNullable<Parameters<typeof fetch>[1]>;
 
 	const group = $derived(data.group);
-	const base = $derived(`/api/groups/${group.id}`);
+	const base = $derived(`/api/v1/groups/${group.id}`);
 	const isOwner = $derived(group.owner === $user?.username);
 
 	// null until edited, so a rename by someone else shows up
@@ -32,9 +33,12 @@
 		busy = true;
 		error = null;
 		try {
-			const res = await fetch(url, init);
+			const headers = new Headers(init.headers);
+			// the API wants every write to say it is JSON, bodiless ones too
+			headers.set('Content-Type', 'application/json');
+			const res = await fetch(url, { ...init, headers });
 			if (res.ok) return true;
-			error = res.status < 500 ? await res.text() : 'Something went wrong.';
+			error = res.status < 500 ? (await errorOf(res)).message : 'Something went wrong.';
 		} catch {
 			error = 'Could not reach the server, check your connection.';
 		} finally {

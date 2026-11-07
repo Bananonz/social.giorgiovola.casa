@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { errorOf } from '#lib/api.js';
 	import { afterNavigate, invalidate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { user } from '#lib/store.js';
@@ -57,11 +58,12 @@
 		if (!card) return;
 		busy = true;
 		try {
-			const res = await fetch(`/api/users/${card.username}/follow`, {
-				method: card.followed ? 'DELETE' : 'POST'
+			const res = await fetch(`/api/v1/users/${card.username}/follow`, {
+				method: card.followed ? 'DELETE' : 'PUT',
+				headers: { 'Content-Type': 'application/json' }
 			});
 			if (!res.ok) {
-				error = (await res.text()) || 'Could not update follow';
+				error = (await errorOf(res)).message || 'Could not update follow';
 				return;
 			}
 			const stats: Pick<typeof card, 'followers' | 'following' | 'followed'> = await res.json();

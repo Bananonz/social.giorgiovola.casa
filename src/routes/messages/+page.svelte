@@ -27,7 +27,6 @@
 				(c): Entry => ({
 					kind: 'dm',
 					key: `dm:${c.peer.username}`,
-					muted: data.mutedPeers.includes(c.peer.username),
 					...c
 				})
 			),
@@ -45,10 +44,10 @@
 		}
 		timer = setTimeout(async () => {
 			try {
-				const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+				const res = await fetch(`/api/v1/search/users?q=${encodeURIComponent(q)}`);
 				// a newer keystroke supersedes this response
 				if (!res.ok || current !== request) return;
-				const found: ChatPeer[] = await res.json();
+				const found: ChatPeer[] = (await res.json()).items;
 				results = found.filter((u) => u.username !== $user?.username);
 			} catch {
 				results = [];

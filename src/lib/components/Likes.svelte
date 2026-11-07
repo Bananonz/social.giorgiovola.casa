@@ -18,9 +18,9 @@
 	};
 
 	onMount(async () => {
-		const res = await fetch(`/api/posts/${postId}/${kind}`);
+		const res = await fetch(`/api/v1/posts/${postId}/${kind}?limit=200`);
 		if (res.ok) {
-			users = await res.json();
+			users = (await res.json()).items;
 		}
 	});
 </script>

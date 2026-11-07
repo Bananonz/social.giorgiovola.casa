@@ -119,7 +119,10 @@
 		<meta property="og:description" content={postText(page.data.post)} />
 		<meta property="og:image" content={postCard(page.data.post)} />
 		<meta property="og:profile:username" content={page.data.post.user.username} />
-		<meta property="og:article:published_time" content={page.data.post.created_at.toISOString()} />
+		<meta
+			property="og:article:published_time"
+			content={new Date(page.data.post.created_at).toISOString()}
+		/>
 
 		<!-- Twitter -->
 		<meta property="twitter:card" content="summary_large_image" />

@@ -28,7 +28,10 @@ export function markMentionSeen(userId: number, postId: number) {
 	const key = `${userId}:${postId}`;
 	if (reported.has(key)) return;
 	reported.add(key);
-	fetch(`/api/posts/${postId}/seen`, { method: 'POST' })
+	fetch(`/api/v1/posts/${postId}/seen`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' }
+	})
 		.then((res) => {
 			if (!res.ok) reported.delete(key);
 		})

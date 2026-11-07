@@ -1,20 +1,26 @@
-import { error, redirect } from '@sveltejs/kit';
-import { findPeer, getBlock, getThread, isDmMuted } from '#lib/server/messages.js';
+import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
+import { apiGet } from '#lib/apiLoad.js';
+import type { ChatMessage, ChatPeer } from '#lib/types.js';
 
 // Nothing is marked as read here: hover preloading runs this load before the page is opened.
-export const load = (async ({ locals, params }) => {
-	if (!locals.user) redirect(303, '/login');
-	const peer = await findPeer(params.username);
-	if (!peer) error(404, 'User not found');
-	if (peer.id === locals.user.id) redirect(303, '/messages');
-
-	const { username, name, avatar } = peer;
-	const [thread, block, muted] = await Promise.all([
-		getThread(locals.user, peer),
-		// `me`: I blocked them, `peer`: they blocked me
-		getBlock(locals.user.id, peer.id),
-		isDmMuted(locals.user.id, peer.id)
+export const load = (async ({ fetch, params, parent }) => {
+	const { user } = await parent();
+	if (!user) redirect(303, '/login');
+	const username = encodeURIComponent(params.username.toLowerCase());
+	if (params.username.toLowerCase() === user.username) redirect(303, '/messages');
+	const [conversation, thread] = await Promise.all([
+		apiGet<{ peer: ChatPeer; block: { me: boolean; peer: boolean }; muted: boolean }>(
+			fetch,
+			`/conversations/${username}`
+		),
+		apiGet<{ items: ChatMessage[]; next_cursor: string | null }>(
+			fetch,
+			`/conversations/${username}/messages`
+		)
 	]);
-	return { peer: { username, name, avatar }, thread, block, muted };
+	return {
+		...conversation,
+		thread: { messages: thread.items, hasMore: thread.next_cursor !== null }
+	};
 }) satisfies PageServerLoad;

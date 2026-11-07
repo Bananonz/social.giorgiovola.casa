@@ -57,7 +57,7 @@ export async function enablePush(): Promise<PushState> {
 	if (!pushSupported()) return 'unsupported';
 	if ((await Notification.requestPermission()) !== 'granted') return getPushState();
 
-	const res = await fetch('/api/push');
+	const res = await fetch('/api/v1/push');
 	if (!res.ok) throw new PushError('server');
 	const { publicKey } = await res.json();
 	const key = keyBytes(publicKey);
@@ -67,7 +67,7 @@ export async function enablePush(): Promise<PushState> {
 	// a subscription made with another key (e.g. the server's key pair was reset) is still saved
 	// fine, but every push sent to it is rejected: replace it
 	if (subscription && !sameKey(subscription.options.applicationServerKey, key)) {
-		await fetch('/api/push', { method: 'DELETE', ...json({ endpoint: subscription.endpoint }) });
+		await fetch('/api/v1/push', { method: 'DELETE', ...json({ endpoint: subscription.endpoint }) });
 		await subscription.unsubscribe();
 		subscription = null;
 	}
@@ -85,7 +85,7 @@ export async function enablePush(): Promise<PushState> {
 			throw e;
 		}
 	}
-	const saved = await fetch('/api/push', { method: 'POST', ...json(subscription.toJSON()) });
+	const saved = await fetch('/api/v1/push', { method: 'POST', ...json(subscription.toJSON()) });
 	if (!saved.ok) throw new PushError('server');
 	return 'on';
 }
@@ -94,7 +94,7 @@ export async function enablePush(): Promise<PushState> {
 export async function disablePush(): Promise<PushState> {
 	const subscription = pushSupported() ? await currentSubscription() : null;
 	if (subscription) {
-		await fetch('/api/push', { method: 'DELETE', ...json({ endpoint: subscription.endpoint }) });
+		await fetch('/api/v1/push', { method: 'DELETE', ...json({ endpoint: subscription.endpoint }) });
 		await subscription.unsubscribe();
 	}
 	return getPushState();
@@ -107,5 +107,5 @@ export async function disablePush(): Promise<PushState> {
 export async function syncPush() {
 	if (!pushSupported() || Notification.permission !== 'granted') return;
 	const subscription = await currentSubscription();
-	if (subscription) await fetch('/api/push', { method: 'POST', ...json(subscription.toJSON()) });
+	if (subscription) await fetch('/api/v1/push', { method: 'POST', ...json(subscription.toJSON()) });
 }
