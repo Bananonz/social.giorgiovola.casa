@@ -56,18 +56,20 @@
 </script>
 
 {#if $user}
-	<nav class="mb-5 flex">
-		<a
-			class={tabClass(data.feed === 'all')}
-			href="/?feed=all"
-			aria-current={data.feed === 'all' ? 'page' : undefined}>All</a
-		>
-		<a
-			class={tabClass(data.feed === 'following')}
-			href="/?feed=following"
-			aria-current={data.feed === 'following' ? 'page' : undefined}>Following</a
-		>
-	</nav>
+	{#if data.followingFeedEnabled}
+		<nav class="mb-5 flex">
+			<a
+				class={tabClass(data.feed === 'all')}
+				href="/?feed=all"
+				aria-current={data.feed === 'all' ? 'page' : undefined}>All</a
+			>
+			<a
+				class={tabClass(data.feed === 'following')}
+				href="/?feed=following"
+				aria-current={data.feed === 'following' ? 'page' : undefined}>Following</a
+			>
+		</nav>
+	{/if}
 	<PostComposer oncreated={add} />
 {:else}
 	<form class="mb-5 flex">

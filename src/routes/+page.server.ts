@@ -6,9 +6,12 @@ import type { Actions, Cookies } from '@sveltejs/kit';
 
 type Feed = 'all' | 'following';
 
+// the following feed is hidden for now: everyone gets "all", whatever their cookie or the url says
+const FOLLOWING_FEED_ENABLED = false;
+
 // the chosen feed is remembered in a cookie, so the home page opens on it next time
 function pickFeed(url: URL, cookies: Cookies, user: App.Locals['user']): Feed {
-	if (!user) return 'all';
+	if (!user || !FOLLOWING_FEED_ENABLED) return 'all';
 	const param = url.searchParams.get('feed');
 	if (param === 'all' || param === 'following') {
 		if (cookies.get('feed') !== param)
@@ -52,6 +55,7 @@ export const load = (async ({ locals, depends, url, cookies }) => {
 
 	return {
 		feed,
+		followingFeedEnabled: FOLLOWING_FEED_ENABLED,
 		posts,
 		pinned,
 		following
