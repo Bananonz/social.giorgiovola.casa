@@ -2,6 +2,7 @@ import { db, inbox } from '#lib/server/db/index.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import { getSwitcher } from '#lib/server/accounts.js';
 import { unreadMessageCount } from '#lib/server/messages.js';
+import { getMotd } from '#lib/server/motd.js';
 import type { LayoutServerLoad } from './$types';
 
 export const load = (async ({ locals }) => {
@@ -22,6 +23,7 @@ export const load = (async ({ locals }) => {
 		muteReason: locals.muteReason,
 		notisCount,
 		messagesCount,
-		accounts: await getSwitcher(locals)
+		accounts: await getSwitcher(locals),
+		motd: await getMotd()
 	};
 }) satisfies LayoutServerLoad;
