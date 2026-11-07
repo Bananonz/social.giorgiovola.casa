@@ -5,5 +5,9 @@ import { parseId } from '#lib/server/validation.js';
 
 /** Deletes one of your own messages, for both sides. */
 export const DELETE: RequestHandler = v1(({ locals, params }) =>
-	deleteDirect(requireUser(locals), parseId(params.id) ?? fail(404, 'Message not found'))
+	deleteDirect(
+		requireUser(locals),
+		params.username,
+		parseId(params.id) ?? fail(404, 'Message not found')
+	)
 );

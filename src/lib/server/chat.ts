@@ -199,9 +199,10 @@ export async function sendDirect(locals: App.Locals, me: User, username: string,
 	return message;
 }
 
-/** Deletes one of your own direct messages, for both sides. */
-export async function deleteDirect(me: User, id: number) {
-	const deleted = await deleteMessage(me.id, id);
+/** Deletes one of your own messages of the conversation with `username`, for both sides. */
+export async function deleteDirect(me: User, username: string, id: number) {
+	const peer = (await findPeer(username)) ?? fail(404, 'User not found');
+	const deleted = await deleteMessage(me.id, id, peer.id);
 	// someone else's message and a missing one look the same: ids of others' messages stay private
 	if (!deleted) fail(404, 'Message not found');
 	await removeUploads(deleted.images);

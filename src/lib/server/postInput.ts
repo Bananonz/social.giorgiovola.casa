@@ -3,7 +3,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import type { User } from '#lib/types.js';
 import { extractHashtags } from '#lib/hashtags.js';
 import { db, polls, post_hashtags, posts, users } from './db/index.js';
-import { ApiError, fail } from './api.js';
+import { ApiError, fail, readJson } from './api.js';
 import { checkPostRefs, createPost, deletePost, getPosts } from './posts.js';
 import { LIMITS, parseId, parsePoll } from './validation.js';
 import {
@@ -49,16 +49,7 @@ export async function readPostBody(request: Request, locals: App.Locals): Promis
 			files: form.getAll('images').filter((f): f is File => f instanceof File && f.size > 0)
 		};
 	}
-	let body: unknown;
-	try {
-		const text = await request.text();
-		body = text.trim() ? JSON.parse(text) : {};
-	} catch {
-		fail(400, 'Invalid JSON body');
-	}
-	if (!body || typeof body !== 'object' || Array.isArray(body))
-		fail(400, 'The body must be a JSON object');
-	return { body: body as Record<string, unknown>, files: [] };
+	return { body: await readJson(request), files: [] };
 }
 
 const unwrap = <T>(value: T | Response): T => {

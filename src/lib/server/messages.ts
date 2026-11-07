@@ -224,10 +224,16 @@ export async function sendMessage(
  * Deletes a message, only if `senderId` sent it. Returns the recipient and the images to remove
  * from disk, or null when there was nothing of theirs to delete.
  */
-export async function deleteMessage(senderId: number, id: number) {
+export async function deleteMessage(senderId: number, id: number, recipientId?: number) {
 	const [row] = await db
 		.delete(messages)
-		.where(and(eq(messages.id, id), eq(messages.sender_id, senderId)))
+		.where(
+			and(
+				eq(messages.id, id),
+				eq(messages.sender_id, senderId),
+				recipientId === undefined ? undefined : eq(messages.recipient_id, recipientId)
+			)
+		)
 		.returning({ recipient_id: messages.recipient_id, images: messages.images });
 	return row ?? null;
 }

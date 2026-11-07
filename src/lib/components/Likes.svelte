@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { UserResult } from '#lib/types.js';
 	import { onMount } from 'svelte';
+	import { allPages, api, type Page } from '#lib/api.js';
 	import Avatar from './Avatar.svelte';
 
 	type Kind = 'likes' | 'regiorgs' | 'quotes';
@@ -18,9 +19,16 @@
 	};
 
 	onMount(async () => {
-		const res = await fetch(`/api/v1/posts/${postId}/${kind}?limit=200`);
-		if (res.ok) {
-			users = (await res.json()).items;
+		try {
+			users = await allPages((cursor) =>
+				api<Page<Entry>>(
+					`posts/${postId}/${kind}?limit=200${
+						cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+					}`
+				)
+			);
+		} catch {
+			// stays on "Loading", as before
 		}
 	});
 </script>

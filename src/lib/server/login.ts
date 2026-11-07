@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
 import { SIGNUP_PASSWORD } from '$app/env/private';
 import type { User } from '#lib/types.js';
 import { db, users } from './db/index.js';
-import { fail } from './api.js';
+import { fail, rateLimit } from './api.js';
 import { dummyVerify, hashPassword, secretsEqual, verifyPassword } from './password.js';
 import { clear, clientIp, hit, isLimited } from './ratelimit.js';
 import { TOKEN_DAYS, createSession, createToken, revokeOtherSessions } from './session.js';
@@ -154,6 +154,9 @@ export async function registerAccount(
 	}
 }
 
+const MAX_SIGN_INS = 30;
+const SIGN_IN_WINDOW_MS = 60 * 60_000;
+
 /**
  * Signs an account in after a successful login: the browser gets a session cookie (`cookie`,
  * the web UI), any other client a bearer token (`token`, the default).
@@ -164,15 +167,22 @@ export async function startSession(
 	mode: unknown,
 	clientName: unknown
 ) {
+	if (mode !== undefined && mode !== null && mode !== 'token' && mode !== 'cookie')
+		fail(400, 'session must be "token" or "cookie"');
+	if (clientName != null && typeof clientName !== 'string')
+		fail(400, 'client_name must be a string');
+	// every sign-in is a sessions row; only failures are limited before this point
+	rateLimit(
+		`sessions:${accountId}`,
+		MAX_SIGN_INS,
+		SIGN_IN_WINDOW_MS,
+		'Too many sign-ins for this account'
+	);
 	const userAgent = event.request.headers.get('user-agent');
 	if (mode === 'cookie') {
 		await createSession(event.cookies, accountId, event.locals.sessions, userAgent);
 		return { session: 'cookie' as const };
 	}
-	if (mode !== undefined && mode !== null && mode !== 'token')
-		fail(400, 'session must be "token" or "cookie"');
-	if (clientName != null && typeof clientName !== 'string')
-		fail(400, 'client_name must be a string');
 	const { token, expires_at } = await createToken(accountId, {
 		kind: 'token',
 		name: typeof clientName === 'string' ? clientName.trim().slice(0, 64) : null,
@@ -269,8 +279,8 @@ export async function changePassword(
 	keepKey: string | null
 ) {
 	await checkCurrentPassword(accountId, current);
-	if (next.length > LIMITS.passwordMax || validatePassword(next))
-		fail(400, validatePassword(next)!);
+	const invalid = validatePassword(next);
+	if (invalid) fail(400, invalid);
 	const { salt, hash } = await hashPassword(next);
 	await db.update(users).set({ password: hash, salt }).where(eq(users.id, accountId));
 	await revokeOtherSessions(accountId, keepKey);

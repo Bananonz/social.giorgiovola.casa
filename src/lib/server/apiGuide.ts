@@ -239,7 +239,8 @@ POST /auth/login                                               public
          "expires_at": "…", "me": <Me> }
   Errors: 400 missing fields, 401 "Wrong username or password." (the same for unknown
   users), 403 banned (with the reason), 429 after 10 failures for one account or 30 for
-  one IP in 15 minutes.
+  one IP in 15 minutes, or after 30 successful sign-ins (login, passkey or register) of
+  one account in an hour: reuse your token instead of signing in again.
   (The website sends "session": "cookie" to get a cookie instead of a token.)
 
 POST /auth/register                                            public
@@ -444,7 +445,8 @@ POST /conversations/:username/messages   signed in, not muted
   { "content" (max ${LIMITS.messageContent}), "uploads": [ids] (max ${LIMITS.messageImages}), "reply_to": message id | null }
   201: <Message>. 403 when either side blocked the other. 20 messages a minute in all
   (direct and group), 5 a minute with images.
-DELETE /conversations/:username/messages/:id   your own message → 204 (for both sides)
+DELETE /conversations/:username/messages/:id   your own message → 204 (for both sides); 404 when it
+  isn't yours or isn't in the conversation with :username
 PUT /conversations/:username/messages/:id/reaction   { "emoji": "👍" } → { "reactions" }
 DELETE /conversations/:username/messages/:id/reaction → { "reactions" }
   One reaction per profile per message; a new one replaces it. 60 a minute.

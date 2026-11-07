@@ -224,7 +224,8 @@ export async function botGroup(
 const MANAGE_WINDOW_MS = 60_000;
 const MAX_MANAGE_ACTIONS = 10;
 
-function manageLimited(accountId: number) {
+/** Counts a bot management action, or throws a 429. */
+export function manageLimited(accountId: number) {
 	const key = `bots:${accountId}`;
 	if (isLimited(key, MAX_MANAGE_ACTIONS))
 		throw new ApiError(429, 'Too many attempts, try again in a minute.', { 'Retry-After': '60' });
@@ -293,9 +294,11 @@ export async function editBot(
 	accountId: number,
 	username: string,
 	changes: ProfileChanges,
-	avatar?: Buffer | null
+	avatar?: Buffer | null,
+	/** the caller already counted this action (before reading an upload) */
+	counted = false
 ) {
-	manageLimited(accountId);
+	if (!counted) manageLimited(accountId);
 	const bot = await ownedBot(accountId, username);
 	const result = await updateProfile(bot.id, bot.username, changes, avatar);
 	if ('error' in result) throw new ApiError(400, result.error);

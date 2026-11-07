@@ -12,7 +12,10 @@ const SSE_HEADERS = {
  * unread counts, direct and group messages, reactions and typing when signed in (token or
  * cookie). Anonymous streams get the public events only.
  */
-export const GET: RequestHandler = ({ locals, request }) =>
-	new Response(openStream(locals.user?.id ?? null, locals.sessionKey, request.signal), {
+export const GET: RequestHandler = ({ locals, request }) => {
+	const userId = locals.user?.id ?? null;
+	const botId = locals.auth === 'bot' ? userId : null;
+	return new Response(openStream(userId, locals.sessionKey, botId, request.signal), {
 		headers: SSE_HEADERS
 	});
+};

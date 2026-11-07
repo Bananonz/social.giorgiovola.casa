@@ -169,7 +169,6 @@ export async function listSessions(accountId: number, currentKey: string | null)
 	return rows.map(({ token, ...row }) => ({ ...row, current: token === currentKey }));
 }
 
-/** How many personal access tokens an account has. */
 /** Live personal tokens: expired ones don't count against the cap (createToken deletes them). */
 export const countPersonalTokens = (accountId: number) =>
 	db.$count(

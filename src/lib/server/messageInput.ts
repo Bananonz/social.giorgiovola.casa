@@ -6,6 +6,7 @@ import {
 	sniffImage,
 	toWebp
 } from './images.js';
+import { readJson } from './api.js';
 import { checkStaged, claimStaged, parseStagedIds } from './stagedUploads.js';
 import { hit, isLimited } from './ratelimit.js';
 import { LIMITS, parseId } from './validation.js';
@@ -66,8 +67,7 @@ export async function readMessageBody(request: Request): Promise<MessageBody | R
 			uploads
 		};
 	}
-	const json = await request.json().catch(() => null);
-	const fields = typeof json === 'object' && json !== null ? (json as Record<string, unknown>) : {};
+	const fields = await readJson(request);
 	const uploads = parseStagedIds(fields.uploads);
 	if (uploads instanceof Response) return uploads;
 	return {

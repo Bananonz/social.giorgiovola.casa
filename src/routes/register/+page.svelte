@@ -1,12 +1,16 @@
 <script lang="ts">
 	import Button from '#lib/components/Button.svelte';
 	import type { PageProps } from './$types';
+	import { onMount } from 'svelte';
 	import { api, messageOf } from '#lib/api.js';
 
 	let { data }: PageProps = $props();
 
 	let error = $state('');
 	let busy = $state(false);
+	// the form only works through the API, so a submit before hydration would post to nothing
+	let hydrated = $state(false);
+	onMount(() => (hydrated = true));
 
 	async function register(e: SubmitEvent) {
 		e.preventDefault();
@@ -76,7 +80,7 @@
 			autocomplete="new-password"
 			required
 		/>
-		<Button class="mt-2.5" size="lg" type="submit" disabled={busy}>Register</Button>
+		<Button class="mt-2.5" size="lg" type="submit" disabled={busy || !hydrated}>Register</Button>
 	</form>
 {:else}
 	<p>Registration is currently closed.</p>

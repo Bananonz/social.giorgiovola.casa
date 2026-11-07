@@ -12,6 +12,8 @@
 
 	let error = $state('');
 	let busy = $state(false);
+	// the form only works through the API, so a submit before hydration would post to nothing
+	let hydrated = $state(false);
 	let passkeys = $state(false);
 	let passkeyBusy = $state(false);
 	let passkeyError = $state('');
@@ -42,6 +44,7 @@
 	}
 
 	onMount(() => {
+		hydrated = true;
 		passkeys = browserSupportsWebAuthn();
 		// offer saved passkeys in the username field's autofill, without a click
 		browserSupportsWebAuthnAutofill().then((ok) => {
@@ -122,7 +125,7 @@
 		autocomplete="current-password"
 		required
 	/>
-	<Button class="mt-2.5" size="lg" type="submit" disabled={busy}>Login</Button>
+	<Button class="mt-2.5" size="lg" type="submit" disabled={busy || !hydrated}>Login</Button>
 </form>
 {#if passkeys}
 	<Button class="mt-5 w-full" size="lg" disabled={passkeyBusy} onclick={() => signInWithPasskey()}>
