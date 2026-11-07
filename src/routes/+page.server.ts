@@ -8,8 +8,12 @@ type Feed = 'all' | 'following';
 
 const PAGE_SIZE = 10;
 
+// the following feed is hidden for now: everyone gets "all", whatever their cookie or the url says
+const FOLLOWING_FEED_ENABLED = false;
+
 // the chosen feed is remembered in a cookie (a UI preference), so the home page opens on it next time
 function pickFeed(url: URL, cookies: Cookies): Feed {
+	if (!FOLLOWING_FEED_ENABLED) return 'all';
 	const param = url.searchParams.get('feed');
 	if (param === 'all' || param === 'following') {
 		if (cookies.get('feed') !== param)
@@ -46,6 +50,7 @@ export const load = (async ({ fetch, depends, url, cookies }) => {
 	}
 	return {
 		feed,
+		followingFeedEnabled: FOLLOWING_FEED_ENABLED,
 		posts: page.items,
 		next: page.next_cursor,
 		source: `/api/v1/timeline?feed=${feed}&limit=${PAGE_SIZE}`,
