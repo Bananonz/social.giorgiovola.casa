@@ -1,10 +1,10 @@
-import type { Actions, PageServerLoad } from './$types';
-import { loadFollowPage, moreFollows } from '#lib/server/follows.js';
+import type { PageServerLoad } from './$types';
+import { loadFollowList } from '#lib/followPage.js';
 
-export const load = (({ params, locals }) =>
-	loadFollowPage(params.username, 'known', locals.user?.id)) satisfies PageServerLoad;
-
-export const actions = {
-	default: ({ params, locals, request }) =>
-		moreFollows(params.username, 'known', locals.user?.id, request)
-} satisfies Actions;
+export const load = (async ({ params, fetch, parent }) =>
+	loadFollowList(
+		fetch,
+		params.username,
+		'known',
+		!!(await parent()).user
+	)) satisfies PageServerLoad;

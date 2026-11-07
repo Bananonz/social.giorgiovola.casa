@@ -1,5 +1,5 @@
 import webpush from 'web-push';
-import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, notInArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
 	db,
@@ -354,3 +354,53 @@ export async function sendPush(postId: number, types?: NotificationType[]) {
 		console.error('push: sendPush failed', e);
 	}
 }
+
+const MAX_PER_SESSION = 10;
+const KEY = /^[A-Za-z0-9_-]{16,256}$/;
+
+/**
+ * Stores (or refreshes) a push subscription for the session or token in use (`sessionKey`), so
+ * signing out stops it. Returns false when the subscription isn't valid.
+ */
+export async function subscribePush(sessionKey: string, body: Record<string, unknown>) {
+	const endpoint = body.endpoint;
+	const keys = (body.keys ?? {}) as { p256dh?: unknown; auth?: unknown };
+	const p256dh = typeof keys.p256dh === 'string' ? keys.p256dh : '';
+	const auth = typeof keys.auth === 'string' ? keys.auth : '';
+	if (!isPushEndpoint(endpoint) || !KEY.test(p256dh) || !KEY.test(auth)) return false;
+
+	await db.transaction(async (tx) => {
+		await tx
+			.insert(push_subscriptions)
+			.values({ session_token: sessionKey, endpoint, p256dh, auth })
+			.onConflictDoUpdate({
+				target: [push_subscriptions.session_token, push_subscriptions.endpoint],
+				set: { p256dh, auth }
+			});
+		const keep = tx
+			.select({ endpoint: push_subscriptions.endpoint })
+			.from(push_subscriptions)
+			.where(eq(push_subscriptions.session_token, sessionKey))
+			.orderBy(desc(push_subscriptions.created_at))
+			.limit(MAX_PER_SESSION);
+		await tx
+			.delete(push_subscriptions)
+			.where(
+				and(
+					eq(push_subscriptions.session_token, sessionKey),
+					notInArray(push_subscriptions.endpoint, keep)
+				)
+			);
+	});
+	return true;
+}
+
+export const unsubscribePush = (sessionKey: string, endpoint: string) =>
+	db
+		.delete(push_subscriptions)
+		.where(
+			and(
+				eq(push_subscriptions.session_token, sessionKey),
+				eq(push_subscriptions.endpoint, endpoint)
+			)
+		);

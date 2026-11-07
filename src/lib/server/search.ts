@@ -75,3 +75,27 @@ export async function search(q: string, limit: number) {
 	]);
 	return { query: q, users, hashtags };
 }
+
+/**
+ * Profiles for the @mention and people pickers: username or name starting with `q` (the
+ * characters a mention can contain), the newest profiles when `q` is empty.
+ */
+export async function suggestUsers(raw: string, limit: number): Promise<UserResult[]> {
+	const q = raw.trim().replace(/^@/, '').toLowerCase().slice(0, 32);
+	// the same characters a mention can contain, which also keeps LIKE wildcards out
+	if (!/^[a-z0-9_]*$/.test(q)) return [];
+	return (
+		db
+			.select({ username: users.username, name: users.name, avatar: users.avatar })
+			.from(users)
+			.where(q ? or(ilike(users.username, `${q}%`), ilike(users.name, `${q}%`)) : undefined)
+			// exact username first, then username prefix matches, then name matches
+			.orderBy(
+				q
+					? sql`(${users.username} = ${q}) DESC, (${users.username} ILIKE ${q + '%'}) DESC`
+					: desc(users.created_at),
+				asc(users.username)
+			)
+			.limit(limit)
+	);
+}

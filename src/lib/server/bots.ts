@@ -1,11 +1,16 @@
 import crypto from 'node:crypto';
-import { and, asc, eq, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { bots, db, posts, users } from './db/index.js';
 import { getGroup, type GroupState } from './groups.js';
 import { getPosts } from './posts.js';
 import { hit, isLimited } from './ratelimit.js';
-import { parseId } from './validation.js';
+import { isUniqueViolation, parseId, validateName, validateUsername } from './validation.js';
+import { ApiError } from './api.js';
+import { removeAvatarFiles } from './accounts.js';
+import { imagesOfPostTrees, removeUploads } from './images.js';
+import { updateProfile, type ProfileChanges } from './profile.js';
+import { closeBotStreams } from './realtime.js';
 import type { User } from '#lib/types.js';
 
 /** How many bots a single account can own. */
@@ -210,4 +215,105 @@ export async function botGroup(
 	const id = parseId(rawId);
 	const group = id === null ? null : await getGroup(id, bot.id);
 	return group ?? json(404, 'Group not found');
+}
+
+// ---------------------------------------------------------------------------------------------
+// managing bots (settings page, /api/v1/me/bots)
+
+// bot tokens are secrets: creating and regenerating them shouldn't be scriptable at speed
+const MANAGE_WINDOW_MS = 60_000;
+const MAX_MANAGE_ACTIONS = 10;
+
+function manageLimited(accountId: number) {
+	const key = `bots:${accountId}`;
+	if (isLimited(key, MAX_MANAGE_ACTIONS))
+		throw new ApiError(429, 'Too many attempts, try again in a minute.', { 'Retry-After': '60' });
+	hit(key, MANAGE_WINDOW_MS);
+}
+
+/** One of the account's bots by username, or a 404. */
+async function ownedBot(accountId: number, username: string) {
+	const [bot] = await db
+		.select({ id: users.id, username: users.username })
+		.from(users)
+		.where(and(eq(users.username, username), eq(users.owner_id, accountId), eq(users.bot, true)));
+	if (!bot) throw new ApiError(404, 'Bot not found.');
+	return bot;
+}
+
+/** Creates a bot owned by the account. Its token is only in this result. */
+export async function createBot(accountId: number, rawName: string, rawUsername: string) {
+	manageLimited(accountId);
+	const name = rawName.trim();
+	const username = rawUsername.trim().replace(/^@/, '').toLowerCase();
+	const invalid = validateName(name) ?? validateUsername(username);
+	if (invalid) throw new ApiError(400, invalid);
+
+	const { token, hash } = newToken();
+	let created;
+	try {
+		created = await db.transaction(async (tx) => {
+			// serialises concurrent creations so the limit can't be raced past
+			await tx.select({ id: users.id }).from(users).where(eq(users.id, accountId)).for('update');
+			const [{ n }] = await tx
+				.select({ n: count() })
+				.from(users)
+				.where(and(eq(users.owner_id, accountId), eq(users.bot, true)));
+			if (n >= MAX_BOTS) return null;
+			const [bot] = await tx
+				.insert(users)
+				.values({ name, username, owner_id: accountId, bot: true })
+				.returning({ id: users.id });
+			await tx.insert(bots).values({ user_id: bot.id, token_hash: hash });
+			return bot;
+		});
+	} catch (e) {
+		if (isUniqueViolation(e)) throw new ApiError(400, 'Username already in use.');
+		throw e;
+	}
+	if (!created) throw new ApiError(400, `You can have at most ${MAX_BOTS} bots.`);
+	return { username, token };
+}
+
+/** Replaces a bot's token: the old one stops working right away. */
+export async function regenerateBotToken(accountId: number, username: string) {
+	manageLimited(accountId);
+	const bot = await ownedBot(accountId, username);
+	const { token, hash } = newToken();
+	await db
+		.update(bots)
+		.set({ token_hash: hash, created_at: sql`NOW()`, last_used_at: null })
+		.where(eq(bots.user_id, bot.id));
+	closeBotStreams([bot.id]);
+	return { username: bot.username, token };
+}
+
+/** Edits a bot's profile; `avatar` null removes it, undefined keeps it. */
+export async function editBot(
+	accountId: number,
+	username: string,
+	changes: ProfileChanges,
+	avatar?: Buffer | null
+) {
+	manageLimited(accountId);
+	const bot = await ownedBot(accountId, username);
+	const result = await updateProfile(bot.id, bot.username, changes, avatar);
+	if ('error' in result) throw new ApiError(400, result.error);
+	// the stream matches mentions against the username it was opened with
+	if (result.profile.username !== bot.username) closeBotStreams([bot.id]);
+	return result.profile;
+}
+
+/** Permanently deletes a bot with its posts. */
+export async function deleteBot(accountId: number, username: string) {
+	manageLimited(accountId);
+	const bot = await ownedBot(accountId, username);
+	// collect the images first: replies to its posts go away with them
+	const images = await imagesOfPostTrees(sql`user_id = ${bot.id}`);
+	await db
+		.delete(users)
+		.where(and(eq(users.id, bot.id), eq(users.owner_id, accountId), eq(users.bot, true)));
+	closeBotStreams([bot.id]);
+	await removeAvatarFiles(bot.id);
+	await removeUploads(images);
 }

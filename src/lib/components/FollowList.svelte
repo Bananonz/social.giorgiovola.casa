@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { deserialize } from '$app/forms';
+	import { api, messageOf, withCursor, type Page } from '#lib/api.js';
 	import { user } from '#lib/store.js';
 	import { profileHover } from '#lib/profileCard.svelte.js';
 	import type { FollowListEntry, User } from '#lib/types.js';
@@ -16,7 +16,10 @@
 			known: number;
 			showKnown: boolean;
 			entries: FollowListEntry[];
-			pageSize: number;
+			/** cursor of the next page, null when this is all */
+			next: string | null;
+			/** the API list these entries come from */
+			source: string;
 		};
 	};
 
@@ -24,7 +27,8 @@
 
 	// writable deriveds: reset when switching tabs, extended by the infinite scroll and follow buttons
 	let entries = $derived(data.entries);
-	let done = $derived(data.entries.length < data.pageSize);
+	let next = $derived(data.next);
+	const done = $derived(next === null);
 	let following = $derived(data.following);
 	let loading = $state(false);
 	let busy = $state<string | null>(null);
@@ -57,19 +61,13 @@
 		if (loading || done) return;
 		loading = true;
 		try {
-			const form = new FormData();
-			form.set('offset', entries.length.toString());
-			const res = await fetch('', { method: 'POST', body: form });
-			const result = deserialize(await res.text());
-			if (result.type !== 'success' || !result.data) {
-				done = true;
-				return;
-			}
-			const more = result.data.entries as FollowListEntry[];
+			const page = await api<Page<FollowListEntry>>(withCursor(data.source, next!));
 			// rows may shift while scrolling (new follows): skip the ones already shown
 			const seen = new Set(entries.map((e) => e.username));
-			entries = [...entries, ...more.filter((e) => !seen.has(e.username))];
-			if (more.length < data.pageSize) done = true;
+			entries = [...entries, ...page.items.filter((e) => !seen.has(e.username))];
+			next = page.next_cursor;
+		} catch {
+			next = null;
 		} finally {
 			loading = false;
 		}
@@ -96,18 +94,15 @@
 	async function toggleFollow(entry: FollowListEntry) {
 		busy = entry.username;
 		try {
-			const res = await fetch(`/api/users/${entry.username}/follow`, {
-				method: entry.followed ? 'DELETE' : 'POST'
+			const { followed } = await api<{ followed: boolean }>(`users/${entry.username}/follow`, {
+				method: entry.followed ? 'DELETE' : 'PUT'
 			});
-			if (!res.ok) {
-				error = (await res.text()) || 'Could not update follow';
-				return;
-			}
-			const { followed }: { followed: boolean } = await res.json();
 			entries = entries.map((e) => (e.username === entry.username ? { ...e, followed } : e));
 			// your own following count changes with it
 			if (own && followed !== entry.followed) following += followed ? 1 : -1;
 			error = null;
+		} catch (e) {
+			error = messageOf(e, 'Could not update follow');
 		} finally {
 			busy = null;
 		}
