@@ -53,5 +53,10 @@ export default defineConfig(({ mode }) => ({
 				}
 			}
 		})
-	]
+	],
+	server: {
+		// the app writes user uploads and avatars into static/ at runtime (served by their own
+		// routes): without this every upload makes the dev server reload the page
+		watch: { ignored: ['**/static/uploads/**', '**/static/avatars/**'] }
+	}
 }));
