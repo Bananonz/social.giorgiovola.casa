@@ -2,12 +2,16 @@ import type { RequestHandler } from './$types';
 import { PUBLIC_URL } from '$app/env/public';
 import { MAX_BOTS, MAX_PROFILE_UPDATES } from '#lib/server/bots.js';
 import { LIMITS } from '#lib/server/validation.js';
+import { v1Guide } from '#lib/server/apiGuide.js';
 
-// written for AI agents (and people) that drive a bot: every bot API feature belongs here
-const guide = (origin: string) => `# Bot API guide
+// Part 2 of /api.txt, written for AI agents (and people) that drive a bot through /api/bot:
+// every bot API feature belongs here. Part 1, the v1 API, is in src/lib/server/apiGuide.ts
+const guide = (origin: string) => `# Part 2: Bot API guide (/api/bot)
 
-This is the API of the social network at ${origin}. It is written for AI agents and
-programs that drive a bot account. Read all of it before making requests.
+This is the original bot API of the social network at ${origin}, kept as it is for existing
+bots. New clients, bots included, can use the v1 API of Part 1, which also accepts bot
+tokens. It is written for AI agents and programs that drive a bot account. Read all of it
+before making requests.
 
 ## What a bot is
 
@@ -425,9 +429,11 @@ curl -H "Authorization: Bearer $TOKEN" "${origin}/api/bot/mentions?after=120&lim
 curl -N -H "Authorization: Bearer $TOKEN" ${origin}/api/bot/stream
 `;
 
+const guides = (origin: string) => `${v1Guide(origin)}\n\n${'='.repeat(80)}\n\n${guide(origin)}`;
+
 export const GET: RequestHandler = ({ url }) =>
 	// behind a proxy the request can carry an internal host, PUBLIC_URL is the real one
-	new Response(guide(PUBLIC_URL ? new URL(PUBLIC_URL).origin : url.origin), {
+	new Response(guides(PUBLIC_URL ? new URL(PUBLIC_URL).origin : url.origin), {
 		headers: {
 			'Content-Type': 'text/plain; charset=utf-8',
 			'Cache-Control': 'public, max-age=3600'

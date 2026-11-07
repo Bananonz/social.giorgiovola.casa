@@ -96,6 +96,18 @@ application/json` on writes and upload images as the raw request body. JSON requ
   conversations and groups, and account mutes on the admin endpoints.
 - Post editing did not exist (`edited_at` was never written). `PATCH /api/v1/posts/:id` is new
   (author only, text only); the web UI has no edit button yet.
+- Changing the password (`PUT /api/v1/me/password`) now requires the current password: a stolen
+  token alone shouldn't be enough to take over the account. The profile form got that field.
+- Writes without a Content-Type, and multipart or form writes, from non-browser clients are
+  refused by SvelteKit's own origin check before the app runs (a plain-text 403, the only
+  non-JSON error). It can't be turned off per request in SvelteKit 3, so the API documents
+  "always send `Content-Type: application/json`" and takes images as the raw request body.
+- Browser session tokens (the cookie) are still stored as is, not hashed: hashing them would
+  sign everyone out. Only the new API tokens are stored as hashes.
+- Every SSR request now calls the API in-process, which authenticates again: a page with three
+  API calls does four session lookups. Fine at this scale; worth caching if it ever matters.
+- `/api/stream` and the other internal routes were removed once nothing called them;
+  `/api/push` stays as an alias because installed service workers may still call it.
 
 ## Endpoints
 

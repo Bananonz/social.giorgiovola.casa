@@ -11,6 +11,7 @@ export const load = (async ({ fetch, params, depends }) => {
 		{ optional: true }
 	);
 	if (!group) redirect(303, '/messages');
-	const { muted: _, ...info } = group;
-	return { group: info };
+	return {
+		group: { id: group.id, name: group.name, owner: group.owner, members: group.members }
+	};
 }) satisfies PageServerLoad;

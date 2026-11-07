@@ -25,7 +25,7 @@ Write all new and modified Svelte code with Svelte 5 runes. Do not introduce leg
 
 **Existing code is not fully migrated.** Many components and pages still use legacy syntax (`export let`, `on:`, `createEventDispatcher`, `$store` auto-subscriptions). When you touch such a file in a meaningful way, convert it to runes as part of the change; do not mix legacy and runes syntax within a single component (Svelte forbids it). Don't do drive-by migrations of files you aren't otherwise changing.
 
-SvelteKit conventions: `+page.server.ts` / `+server.ts` for server logic, form actions and `load` functions for data; types come from `./$types`.
+SvelteKit conventions: `+server.ts` endpoints under `/api/v1` hold the server logic (see "API-first rule"), `+page.server.ts` / `+layout.server.ts` `load` functions only read from them; types come from `./$types`. There are no form actions.
 
 ## Design guide
 
@@ -84,11 +84,18 @@ The project is on Prettier 2 and `prettier-plugin-svelte` 2, which can't print S
 
 ## Project layout
 
-- `src/routes/` — pages and API endpoints (`api/**/+server.ts`).
+- `src/routes/api/v1/**/+server.ts` — the public, versioned JSON API. Every feature lives here (see "API-first rule").
+- `src/routes/api/bot/**` — the original bot API, kept unchanged for existing bots. `src/routes/api/push` is an alias of `/api/v1/push` for older clients.
+- `src/routes/` (everything else) — pages. Their `+page.server.ts` / `+layout.server.ts` only call the API; plus asset routes (`avatar/`, `avatars/`, `uploads/`, `@[username]/[post]/image.png`) and `/api.txt`.
 - `src/lib/components/` — Svelte components.
-- `src/lib/server/` — server-only code (db, sessions, rate limiting, images, push, realtime…). Never import it from client code.
+- `src/lib/api.ts` — calling the API from the browser (`api()`, `ApiError`, `Page`); `src/lib/apiLoad.ts` — `apiGet()` for page loads (401 → login, `error()` otherwise).
+- `src/lib/server/` — server-only code: services (posts, feeds, users, chat, identities, admin, login, passkeyAuth, notifications…), db, sessions, rate limiting, images, push, realtime. Never import it from client code or page loads.
+- `src/lib/server/api.ts` — v1 plumbing: `v1()` handler wrapper, `ApiError` / `fail()`, `requireUser` / `requireAccount` / `requireUnmuted` / `requireStaff` / `requireAdmin`, `readJson`, pagination (`offsetParams`, `offsetPage`, `idCursor`), `rateLimit`, CORS headers.
+- `src/lib/server/auth.ts` — `authenticate(event)`: the one place requests are authenticated (cookie, `sgu_` human token or `sgc_` bot token), called from `hooks.server.ts`.
+- `src/lib/server/apiGuide.ts` — Part 1 of `/api.txt` (the v1 reference). `src/lib/botDocs.ts` — the `/developers` reference (bot API and v1).
 - `src/lib/server/db/schema.ts` — the database schema (source of truth).
-- `src/hooks.server.ts` — session handling and security headers.
+- `src/hooks.server.ts` — authentication, CORS for `/api/v1`, JSON 404s under `/api/v1`, security headers.
+- `docs/api-migration.md` — why the API looks the way it does.
 - `src/service-worker.ts` — service worker (web push).
 - `drizzle/` — generated SQL migrations and snapshots (committed).
 - `migrate.ts` — migration runner, executed on every container start.
@@ -143,12 +150,25 @@ There is no test suite. Before finishing a change, run `bun run check` and `bun 
 
 - Prettier: tabs, single quotes, no trailing commas, print width 100 (`.prettierrc`).
 - Import local modules with the `.js` extension where the existing code does (e.g. `#lib/store.js`).
-- Keep server-only logic in `src/lib/server/`; validate all user input on the server (`src/lib/server/validation.ts`) and apply rate limits (`src/lib/server/ratelimit.ts`) to new write endpoints.
+- Keep server-only logic in `src/lib/server/`; validate all user input on the server (`src/lib/server/validation.ts`) and apply rate limits (`rateLimit` in `src/lib/server/api.ts`, built on `src/lib/server/ratelimit.ts`) to new write endpoints.
 - Comments explain _why_, matching the existing terse lowercase style.
+
+## API-first rule
+
+The app is a client of its own public API. These rules are firm:
+
+1. **Every feature, read or write, is built as a `/api/v1/*` endpoint first.** Never put business logic or direct database access (`#lib/server/db`, drizzle) in `+page.server.ts`, `+layout.server.ts` or Svelte components. Page `load` functions only call the API through `event.fetch` (use `apiGet` from `src/lib/apiLoad.ts`), plus redirects, 404s and UI preferences such as the feed cookie. Components only call the API with `fetch` (use `api` from `src/lib/api.ts`).
+2. **No feature may exist only as a SvelteKit form action or `load` function.** Don't add `export const actions`. If a page needs data, there must be an endpoint a third-party client could call for the same data.
+3. **Endpoints are thin:** wrap the handler in `v1()`, authenticate through `locals` (filled by the shared `authenticate()`, so Bearer tokens and the cookie work the same) with `requireUser` / `requireAccount` / `requireUnmuted` / `requireStaff` / `requireAdmin`, validate with `src/lib/server/validation.ts`, rate limit writes with `rateLimit`, call a service in `src/lib/server/`, and return JSON. Errors are always `{ "error": "message" }` with a 4xx/5xx status: throw `fail(status, message)`. Lists answer `{ items, next_cursor }` with `?limit=` and `?cursor=`. Writes accept JSON (and raw bytes for images); multipart is only a convenience for the browser.
+4. **Document every new or changed endpoint in the same change:** Part 1 of `/api.txt` (`src/lib/server/apiGuide.ts`), the `README.md` endpoint table and `src/lib/botDocs.ts` (`v1Groups`, shown on `/developers`). Write `/api.txt` for an LLM reading it cold: method, path, who may call it, body fields and limits, response shape, errors, rate limits, realtime events.
+5. **Don't break the published contract.** Within v1 only add: new endpoints, new optional fields, new response fields. Never rename or remove fields, change types or tighten what is accepted; a breaking change needs `/api/v2`. `/api/bot/*` stays as it is.
+6. **Check bot use.** v1 accepts bot tokens (bots act as their own profile; `requireAccount` refuses them). When a feature is something a bot could use, also follow the Bot API rules below.
+
+Tokens: human tokens (`sgu_…`) are rows of `sessions` with `kind` `token` (from a login) or `personal`, keyed by the sha256 of the token, never the token itself. Browser sessions are `kind` `cookie`. Revoking is deleting the row. Cookies are ignored on requests whose `Origin` is another site, and `/api/v1` CORS never allows credentials; don't change either. SvelteKit's own origin check refuses writes without a Content-Type (or with a form one) from other origins, which is why clients send JSON and raw image bodies.
 
 ## Bot API
 
-The bot API lives in `src/routes/api/bot/` (auth, rate limits and helpers in `src/lib/server/bots.ts`). Bots are often driven by LLM agents, which learn the API from the plain-text guide served at `/api.txt` (`src/routes/api.txt/+server.ts`).
+The original bot API lives in `src/routes/api/bot/` (auth, rate limits and helpers in `src/lib/server/bots.ts`) and is kept unchanged for existing bots: don't change its contract. New features go to `/api/v1` (which bots can also use). Bots are often driven by LLM agents, which learn the API from the plain-text guide served at `/api.txt` (`src/routes/api.txt/+server.ts`, Part 2).
 
 **Every new or changed bot API feature must be documented in `/api.txt`** in the same change: endpoint, method, body fields and limits, response shape, errors and rate limits, with a curl example when it helps. Write it for an LLM reading it cold: explicit, complete, no assumed context. Also keep the endpoint table in `README.md` and the endpoint reference behind the `/developers` page (`src/lib/botDocs.ts`) in sync.
 

@@ -321,7 +321,7 @@
 </section>
 
 <section class={sectionClass}>
-	<h2>Bots</h2>
+	<h2>OAuth</h2>
 	<p class={hintClass}>
 		Bots are profiles you drive from your own code through the bot API: they can post, reply, like,
 		follow people, send direct messages and track their mentions and the posts of who they follow.
