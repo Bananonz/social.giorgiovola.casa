@@ -18,11 +18,14 @@ export type RealtimeEvents = {
 	notifications: { count: number };
 	message: ChatMessage;
 	message_deleted: { id: number };
+	/** the sender changed the text of a direct message: the whole message, as it is now */
+	message_edited: ChatMessage;
 	/** the reactions to a direct message changed: all of them, oldest first */
 	message_reactions: { id: number; reactions: MessageReaction[] };
 	messages_unread: { count: number };
 	group_message: GroupMessage;
 	group_message_deleted: { group_id: number; id: number };
+	group_message_edited: GroupMessage;
 	group_message_reactions: { group_id: number; id: number; reactions: MessageReaction[] };
 	/** a group was renamed or its members changed (you may have been removed) */
 	group_updated: { id: number };
@@ -61,10 +64,12 @@ export function connectRealtime() {
 		'notifications',
 		'message',
 		'message_deleted',
+		'message_edited',
 		'message_reactions',
 		'messages_unread',
 		'group_message',
 		'group_message_deleted',
+		'group_message_edited',
 		'group_message_reactions',
 		'group_updated',
 		'typing'

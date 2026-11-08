@@ -18,3 +18,4 @@ src/lib/components/Button.svelte
 src/lib/components/Search.svelte
 src/routes/search/+page.svelte
 src/lib/components/Loading.svelte
+src/routes/messages/+layout.svelte

@@ -5,6 +5,7 @@ import {
 	createGroup,
 	createLimited,
 	deleteGroupMessage,
+	editGroupMessage,
 	getGroup,
 	getGroupConversations,
 	getGroupThread,
@@ -40,6 +41,7 @@ import {
 } from './messageReactions.js';
 import {
 	deleteMessage,
+	editMessage,
 	findPeer,
 	getBlock,
 	getConversations,
@@ -53,15 +55,18 @@ import {
 import {
 	publishGroupMessage,
 	publishGroupMessageDeleted,
+	publishGroupMessageEdited,
 	publishGroupMessageReactions,
 	publishGroupUpdated,
 	publishMessage,
 	publishMessageDeleted,
+	publishMessageEdited,
 	publishMessageReactions,
 	publishTyping,
 	pushUnreadMessages
 } from './realtime.js';
 import { LIMITS } from './validation.js';
+import { EDIT_WINDOW_MS } from '#lib/messageEdits.js';
 
 /** Direct conversations and group chats, as the /api/v1 endpoints use them. */
 
@@ -196,6 +201,45 @@ export async function sendDirect(locals: App.Locals, me: User, username: string,
 		throw e;
 	}
 	void publishMessage(message, me.id, peer.id, me.name);
+	return message;
+}
+
+// edits, per profile over direct and group messages together
+const MAX_EDITS = 30;
+
+/** The new text of an edited message: `{ content }`, trimmed and within the limit. */
+function readEdit(body: Record<string, unknown>) {
+	if (typeof body.content !== 'string') fail(400, 'content must be a string');
+	const content = body.content.trim();
+	if (content.length > LIMITS.messageContent)
+		fail(400, `Messages can be at most ${LIMITS.messageContent} characters`);
+	return content;
+}
+
+/** Turns what an edit service said went wrong into the error to send back. */
+function edited<M>(result: M | 'gone' | 'expired' | 'empty'): M {
+	// someone else's message and a missing one look the same, like for deleting
+	if (result === 'gone') fail(404, 'Message not found');
+	if (result === 'expired')
+		fail(403, `Messages can only be edited for ${EDIT_WINDOW_MS / 60_000} minutes after sending`);
+	if (result === 'empty') fail(400, 'Missing content');
+	return result as M;
+}
+
+/** Changes the text of one of your own messages to `username`, within an hour of sending it. */
+export async function editDirect(
+	me: User,
+	username: string,
+	id: number,
+	body: Record<string, unknown>
+) {
+	const content = readEdit(body);
+	const peer = (await findPeer(username)) ?? fail(404, 'User not found');
+	const block = await getBlock(me.id, peer.id);
+	if (block.me || block.peer) fail(403, "You can't edit messages in this conversation");
+	rateLimit(`message-edit:${me.id}`, MAX_EDITS, 60_000, 'Editing too fast');
+	const message = edited(await editMessage(me, peer, id, content));
+	publishMessageEdited(message, [me.id, peer.id]);
 	return message;
 }
 
@@ -334,6 +378,24 @@ export async function sendToGroup(
 		me.id,
 		group.members.map((m) => m.id),
 		group.name
+	);
+	return message;
+}
+
+/** Changes the text of one of your own messages in the group, within an hour of sending it. */
+export async function editInGroup(
+	me: User,
+	id: number | null,
+	messageId: number,
+	body: Record<string, unknown>
+) {
+	const content = readEdit(body);
+	const group = await groupOf(me, id);
+	rateLimit(`message-edit:${me.id}`, MAX_EDITS, 60_000, 'Editing too fast');
+	const message = edited(await editGroupMessage(group.id, me.id, messageId, content));
+	publishGroupMessageEdited(
+		message,
+		group.members.map((m) => m.id)
 	);
 	return message;
 }

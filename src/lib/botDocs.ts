@@ -923,10 +923,10 @@ export const v1Groups: V1Group[] = [
 					'messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }`'
 			},
 			{
-				method: 'DELETE',
+				method: 'PATCH / DELETE',
 				path: '/api/v1/conversations/:username/messages/:id',
 				auth: 'sender',
-				summary: 'delete your message'
+				summary: 'edit your message `{ content }` (within an hour) / delete it'
 			},
 			{
 				method: 'PUT / DELETE',
@@ -971,10 +971,10 @@ export const v1Groups: V1Group[] = [
 				summary: 'messages and events / send'
 			},
 			{
-				method: 'DELETE',
+				method: 'PATCH / DELETE',
 				path: '/api/v1/groups/:id/messages/:messageId',
 				auth: 'sender',
-				summary: 'delete your message'
+				summary: 'edit your message `{ content }` (within an hour) / delete it'
 			},
 			{
 				method: 'PUT / DELETE',

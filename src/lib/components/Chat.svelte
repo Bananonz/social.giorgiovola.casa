@@ -6,7 +6,7 @@
 	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
 	import QuoteCard from './QuoteCard.svelte';
 	import { onRealtime } from '#lib/realtime.js';
-	import { isMobile, user } from '#lib/store.js';
+	import { isMobile, messagesCount, user } from '#lib/store.js';
 	import type {
 		ChatMessage,
 		ChatPeer,
@@ -22,6 +22,8 @@
 	import { isHttpLink } from '#lib/utils.js';
 	import { openImage } from '#lib/imageViewer.svelte.js';
 	import { groupEventText } from '#lib/groupEvents.js';
+	import { editable } from '#lib/messageEdits.js';
+	import { cubicIn, quintOut } from 'svelte/easing';
 	import {
 		dmKey,
 		groupKey,
@@ -77,10 +79,25 @@
 	let fileInput = $state<HTMLInputElement>();
 	let content = $state('');
 	/** messages on their way to the server, shown at the bottom until they land */
-	let pending = $state<(Draft & { key: number; text: string })[]>([]);
+	let pending = $state<(Draft & { key: number; text: string; sentAt: number })[]>([]);
 	let pendingKey = 0;
+	// counts messages sent from here: replays the send button's paper plane flying off
+	let sends = $state(0);
+	/**
+	 * Sent messages whose rise out of the input is still playing, by id, with how far along it is
+	 * (a negative delay). The server usually answers well before it ends, and the pending bubble it
+	 * started on goes away then: the message carries it on from there instead of cutting it short.
+	 */
+	let rising = $state<Record<number, number>>({});
+	const SEND_IN_MS = 380;
 	/** the visible height, which shrinks while the on-screen keyboard is open */
 	let viewportHeight = $state<number | null>(null);
+	// the header's three dots menu: mute, block or the group's info
+	let optionsOpen = $state(false);
+	let options: HTMLDivElement | undefined = $state();
+	const unreadLabel = $derived(
+		Intl.NumberFormat(undefined, { notation: 'compact' }).format($messagesCount)
+	);
 	let loadingOlder = false;
 	let error = $state<string | null>(null);
 	let attachments = $state<Attachment[]>([]);
@@ -105,7 +122,11 @@
 	const DOUBLE_TAP_MS = 300;
 
 	let replyingTo = $state<Message | null>(null);
-	/** the message whose menu (reactions, reply, copy, delete) is open, and where to show it */
+	/** the message whose text is being changed in the composer */
+	let editing = $state<Message | null>(null);
+	/** what was typed before starting an edit, given back once it ends */
+	let draftBeforeEdit = '';
+	/** the message whose menu (reactions, reply, edit, copy, delete) is open, and where to show it */
 	let menu = $state<{
 		message: Message;
 		top: number;
@@ -113,6 +134,8 @@
 		left: number;
 		right: number;
 		mine: boolean;
+		/** sent within the hour: the text can still change */
+		editable: boolean;
 	} | null>(null);
 	let menuEl = $state<HTMLDivElement>();
 	/** the message whose reactions list (who reacted with what) is open, and where to show it */
@@ -151,6 +174,41 @@
 		index === 0 || dayKey(dateOf(messages[index])) !== dayKey(dateOf(messages[index - 1]));
 	const timeOf = (m: Message) =>
 		dateOf(m).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+	/**
+	 * The message is the first of a run from the other side (in groups, from someone else): it
+	 * gets more room above it, while a run's messages stay close like on Telegram. Day separators
+	 * and event lines have their own margins.
+	 */
+	function startsRun(index: number) {
+		const prev = messages[index - 1];
+		if (!prev || startsDay(index) || isEvent(prev)) return false;
+		return !joinedAbove(index);
+	}
+
+	/** The message continues the run of the one above it: same side, same sender, same day. */
+	function joinedAbove(index: number) {
+		const prev = messages[index - 1];
+		const current = messages[index];
+		if (!prev || !current || startsDay(index) || isEvent(prev) || isEvent(current)) return false;
+		return isMine(prev) === isMine(current) && senderOf(prev) === senderOf(current);
+	}
+
+	/** The run goes on below: another message of it, or one of yours still on its way. */
+	const joinedBelow = (index: number) =>
+		index === messages.length - 1
+			? pending.length > 0 && isMine(messages[index])
+			: joinedAbove(index + 1);
+
+	/**
+	 * Bubbles of a run hug each other on the side of their sender, like on Telegram: tight corners
+	 * where they meet, and a tail on the last one. The other side keeps its round corners.
+	 */
+	function bubbleShape(mine: boolean, above: boolean, below: boolean) {
+		if (mine)
+			return `${above ? 'rounded-tr-[4px]' : ''} ${below ? 'rounded-br-[4px]' : 'rounded-br-none'}`;
+		return `${above ? 'rounded-tl-[4px]' : ''} ${below ? 'rounded-bl-[4px]' : 'rounded-bl-none'}`;
+	}
 
 	/** Today, Yesterday, a weekday within the week, else the date (with the year if not this one). */
 	function dayLabel(d: Date) {
@@ -242,8 +300,76 @@
 	function startReply(message: Message) {
 		menu = null;
 		if (!canWrite) return;
+		if (editing) stopEditing();
 		replyingTo = message;
 		textarea?.focus();
+	}
+
+	async function startEdit(message: Message) {
+		menu = null;
+		if (!canWrite || !editable(message.created_at)) return;
+		if (!editing) draftBeforeEdit = content;
+		replyingTo = null;
+		editing = message;
+		content = message.content;
+		await tick();
+		textarea?.focus();
+		textarea?.setSelectionRange(content.length, content.length);
+	}
+
+	/** Leaves edit mode, giving back what was being typed before it. */
+	function stopEditing() {
+		editing = null;
+		content = draftBeforeEdit;
+		draftBeforeEdit = '';
+	}
+
+	/** A message's new version, from the server: its text, link card and edit time. */
+	function replace(updated: Message) {
+		messages = messages.map((m) =>
+			m.id === updated.id
+				? updated
+				: m.reply_to?.id === updated.id
+				? { ...m, reply_to: { ...m.reply_to, content: updated.content.slice(0, 200) } }
+				: m
+		);
+	}
+
+	async function saveEdit(message: Message) {
+		const text = content.trim();
+		stopEditing();
+		if (text === message.content) return;
+		if (!text && !message.images?.length) {
+			showError('A message needs some text. Delete it instead.');
+			return;
+		}
+		const before = messages.find((m) => m.id === message.id);
+		if (!before) return;
+		// shown right away, the server's answer replaces it
+		replace({ ...before, content: text, edited_at: new Date() });
+		try {
+			const res = await fetch(`${messagesUrl}/${message.id}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ content: text })
+			});
+			if (res.ok) {
+				replace(await res.json());
+				return;
+			}
+			if (res.status === 404) {
+				remove(message.id);
+				return;
+			}
+			showError(
+				res.status === 400 || res.status === 403 || res.status === 429
+					? (await errorOf(res)).message
+					: 'Something went wrong.'
+			);
+		} catch {
+			showError('Could not reach the server, check your connection.');
+		}
+		replace(before);
 	}
 
 	/** Scrolls to the message a reply answers, loading older pages until it shows up. */
@@ -272,8 +398,40 @@
 			above,
 			left: rect.left,
 			right: window.innerWidth - rect.right,
-			mine: isMine(message)
+			mine: isMine(message),
+			editable: isMine(message) && !isEvent(message) && editable(message.created_at)
 		};
+	}
+
+	type MenuAction = { label: string; icon: 'reply' | 'edit' | 'copy' | 'delete'; run: () => void };
+
+	/** What the menu offers for a message: replying and editing need the conversation open. */
+	function menuActions(
+		message: Message,
+		{ mine, editable: canEdit }: { mine: boolean; editable: boolean }
+	): MenuAction[] {
+		const actions: MenuAction[] = [];
+		if (canWrite) actions.push({ label: 'Reply', icon: 'reply', run: () => startReply(message) });
+		if (canWrite && canEdit)
+			actions.push({ label: 'Edit', icon: 'edit', run: () => startEdit(message) });
+		if (message.content)
+			actions.push({ label: 'Copy text', icon: 'copy', run: () => copyText(message) });
+		if (mine)
+			actions.push({
+				label: 'Delete',
+				icon: 'delete',
+				run: () => {
+					menu = null;
+					deleteMessage(message);
+				}
+			});
+		return actions;
+	}
+
+	/** The options button next to a message: opens its menu, or closes it when it's open. */
+	function toggleMenu(message: Message, el: HTMLElement) {
+		if (menu?.message.id === message.id) menu = null;
+		else openMenu(message, el);
 	}
 
 	function openReactors(message: Message, el: HTMLElement) {
@@ -304,6 +462,23 @@
 		}
 	}
 
+	const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+	/** The menu grows out of the message it belongs to, and shrinks back into it, quicker. */
+	function pop(
+		_node: HTMLElement,
+		{ above, leaving = false }: { above: boolean; leaving?: boolean }
+	) {
+		return {
+			duration: reducedMotion() ? 0 : leaving ? 130 : 280,
+			easing: leaving ? cubicIn : quintOut,
+			css: (t: number) =>
+				`opacity: ${t}; transform: translateY(${(1 - t) * (above ? 8 : -8)}px) scale(${
+					0.88 + 0.12 * t
+				})`
+		};
+	}
+
 	// touch gestures on a message: swipe right to reply, long press for the menu, double tap for ❤️
 	let gesture: {
 		message: Message;
@@ -323,7 +498,8 @@
 
 	function onPointerDown(e: PointerEvent, message: Message) {
 		suppressClick = false;
-		if (e.pointerType === 'mouse' || !e.isPrimary || !canWrite) return;
+		// the menu still offers copying and deleting in a blocked conversation
+		if (e.pointerType === 'mouse' || !e.isPrimary) return;
 		const el = e.currentTarget as HTMLElement;
 		gesture = {
 			message,
@@ -354,7 +530,7 @@
 			gesture.moved = true;
 			clearTimeout(pressTimer);
 			// mostly sideways and to the right; anything else is the list scrolling
-			gesture.swiping = dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.5;
+			gesture.swiping = canWrite && dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.5;
 			if (!gesture.swiping) {
 				gesture = null;
 				return;
@@ -383,6 +559,7 @@
 		}
 		if (e.type !== 'pointerup' || g.moved || g.interactive) return;
 		const now = Date.now();
+		if (!canWrite) return;
 		if (lastTap.id === g.message.id && now - lastTap.time < DOUBLE_TAP_MS) {
 			lastTap = { id: -1, time: 0 };
 			// like Instagram, a double tap only ever adds the heart
@@ -390,9 +567,30 @@
 		} else lastTap = { id: g.message.id, time: now };
 	}
 
+	/**
+	 * Right click opens the message menu. A long press opens it on its own (onPointerDown), so the
+	 * context menu the browser fires after it is only cancelled. Links, images and selected text
+	 * keep the browser's menu (open in a new tab, save the image, copy the selection).
+	 */
+	function onContextMenu(e: MouseEvent, message: Message) {
+		if (gesture || suppressClick) {
+			e.preventDefault();
+			return;
+		}
+		if ((e.target as Element).closest('a, img')) return;
+		const row = e.currentTarget as HTMLElement;
+		const selection = window.getSelection();
+		if (selection && !selection.isCollapsed && row.contains(selection.anchorNode)) return;
+		e.preventDefault();
+		openMenu(message, row);
+	}
+
 	function onWindowPointerDown(e: PointerEvent) {
 		const target = e.target as Element;
-		if (menu && !menuEl?.contains(target)) menu = null;
+		// the chat's options menu closes on a press anywhere outside it
+		if (optionsOpen && !options?.contains(target)) optionsOpen = false;
+		// the options button toggles the menu itself
+		if (menu && !menuEl?.contains(target) && !target.closest?.('[data-menu-trigger]')) menu = null;
 		// the pills toggle the list themselves
 		if (reactors && !reactorsEl?.contains(target) && !target.closest?.('[data-reactions]'))
 			reactors = null;
@@ -416,6 +614,34 @@
 		);
 
 	const scrollToBottom = () => (list.scrollTop = list.scrollHeight);
+
+	// the frame of a glide to the bottom underway, if any
+	let glide = 0;
+	const GLIDE_MS = 320;
+	const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+	/**
+	 * Scrolls to the bottom gently, for a new message: jumping there moves everything at once. It
+	 * aims at where the bottom is on every frame, as the message grows in and the input shrinks.
+	 */
+	function glideToBottom() {
+		cancelAnimationFrame(glide);
+		if (reducedMotion()) return scrollToBottom();
+		const from = list.scrollTop;
+		const start = performance.now();
+		const step = (now: number) => {
+			const t = Math.min(1, (now - start) / GLIDE_MS);
+			const bottom = list.scrollHeight - list.clientHeight;
+			list.scrollTop = from + (bottom - from) * easeInOut(t);
+			glide = t < 1 ? requestAnimationFrame(step) : 0;
+		};
+		glide = requestAnimationFrame(step);
+	}
+	/** Scrolling by hand takes over from a glide. */
+	function stopGlide() {
+		cancelAnimationFrame(glide);
+		glide = 0;
+	}
 	const isAtBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 80;
 
 	// whether the view follows the bottom: images load after the first scroll and would
@@ -424,14 +650,31 @@
 
 	/** Images don't bubble load, so this listens in the capture phase. */
 	function onMediaLoad() {
-		if (stick) scrollToBottom();
+		if (stick && !glide) scrollToBottom();
+	}
+
+	/** Lets a sent message finish the rise its pending bubble started. */
+	function carryOn(id: number, sentAt: number) {
+		const elapsed = performance.now() - sentAt;
+		if (elapsed >= SEND_IN_MS || reducedMotion()) return;
+		rising[id] = -elapsed;
+		setTimeout(() => delete rising[id], SEND_IN_MS - elapsed + 50);
 	}
 
 	async function add(incoming: Message[], forceScroll = false) {
 		const follow = forceScroll || isAtBottom();
+		// our own message echoed by the stream before the send's answer: it replaces its pending
+		// bubble (the oldest one with that text, they go out in order) right away
+		for (const message of incoming) {
+			if (!isMine(message) || messages.some((m) => m.id === message.id)) continue;
+			const draft = pending.find((p) => p.text === message.content.trim());
+			if (!draft) continue;
+			carryOn(message.id, draft.sentAt);
+			pending = pending.filter((p) => p !== draft);
+		}
 		messages = merge(messages, incoming);
 		await tick();
-		if (follow) scrollToBottom();
+		if (follow) glideToBottom();
 	}
 
 	// set when there may be unread messages, cleared once the reader has seen the bottom
@@ -448,7 +691,7 @@
 	function onScroll() {
 		menu = null;
 		reactors = null;
-		stick = isAtBottom();
+		if (!glide) stick = isAtBottom();
 		if (list.scrollTop < 100) loadOlder();
 		if (pendingRead && isAtBottom()) markRead();
 	}
@@ -507,6 +750,7 @@
 			.filter((m) => m.id !== id)
 			.map((m) => (m.reply_to?.id === id ? { ...m, reply_to: null } : m));
 		if (replyingTo?.id === id) replyingTo = null;
+		if (editing?.id === id) stopEditing();
 		if (menu?.message.id === id) menu = null;
 		if (reactors?.id === id) reactors = null;
 	}
@@ -623,6 +867,7 @@
 	let outbox = Promise.resolve();
 
 	async function send() {
+		if (editing) return saveEdit(editing);
 		const text = content.trim();
 		if (!text && attachments.length === 0) return;
 		const draft: Draft = { content, replyingTo, attachments };
@@ -633,13 +878,15 @@
 		error = null;
 		resetTyping(typingTarget);
 		const key = pendingKey++;
-		pending = [...pending, { ...draft, key, text }];
+		pending = [...pending, { ...draft, key, text, sentAt: performance.now() }];
+		sends++;
 		outbox = outbox.then(() => post(draft, text, key));
 		await tick();
-		scrollToBottom();
+		glideToBottom();
 	}
 
 	async function post(draft: Draft, text: string, key: number) {
+		const sentAt = pending.find((p) => p.key === key)?.sentAt ?? 0;
 		const settle = () => (pending = pending.filter((p) => p.key !== key));
 		const send = async (fresh: boolean) => {
 			const uploads = await uploadIds(draft.attachments, fresh);
@@ -659,6 +906,8 @@
 			if (res.status === 410) res = await send(true);
 			if (res.ok) {
 				const message = await res.json();
+				// the stream may have delivered it already, and taken over the pending bubble
+				if (pending.some((p) => p.key === key)) carryOn(message.id, sentAt);
 				settle();
 				// the pending bubble showed these until now
 				for (const a of draft.attachments) a.release();
@@ -703,6 +952,11 @@
 	}
 
 	function onKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && editing) {
+			e.preventDefault();
+			stopEditing();
+			return;
+		}
 		if (e.key === 'Escape' && replyingTo) {
 			e.preventDefault();
 			replyingTo = null;
@@ -767,7 +1021,7 @@
 		// the list shrinks when the keyboard opens, the input grows or a bar (reply, typing,
 		// attachments) shows up: keep the latest message in view if it was
 		const resizes = new ResizeObserver(() => {
-			if (stick) scrollToBottom();
+			if (stick && !glide) scrollToBottom();
 		});
 		resizes.observe(list);
 		const onPointer = (e: PointerEvent) => (touching = e.pointerType !== 'mouse');
@@ -783,6 +1037,9 @@
 						onRealtime('group_message_deleted', ({ group_id, id }) => {
 							if (group_id === groupId) remove(id);
 						}),
+						onRealtime('group_message_edited', (message) => {
+							if (message.group_id === groupId) replace(message);
+						}),
 						onRealtime('group_message_reactions', ({ group_id, id, reactions }) => {
 							if (group_id === groupId) setReactions(id, reactions);
 						})
@@ -794,6 +1051,8 @@
 							if (message.sender === peerUsername) markRead();
 						}),
 						onRealtime('message_deleted', ({ id }) => remove(id)),
+						// ids are unique across conversations: only a message shown here is replaced
+						onRealtime('message_edited', replace),
 						// ids are unique across conversations: only a message shown here is updated
 						onRealtime('message_reactions', ({ id, reactions }) => setReactions(id, reactions))
 				  ];
@@ -803,6 +1062,7 @@
 		};
 		document.addEventListener('visibilitychange', onVisibility);
 		return () => {
+			stopGlide();
 			for (const off of offs) off();
 			window.removeEventListener('dragenter', onDragEnter);
 			window.removeEventListener('dragover', onDragOver);
@@ -828,6 +1088,7 @@
 		reactors = null;
 	}}
 	onkeydown={(e) => {
+		if (e.key === 'Escape') optionsOpen = false;
 		if (e.key === 'Escape' && menu) menu = null;
 		if (e.key === 'Escape' && reactors) reactors = null;
 	}}
@@ -836,57 +1097,83 @@
 {#if menu}
 	{@const current = menu.message}
 	{@const mineEmoji = myReaction(current)?.emoji}
+	{@const above = menu.above}
 	<div
 		bind:this={menuEl}
-		role="menu"
-		onmousedown={keepFocus}
-		tabindex="-1"
-		class="fixed z-50 flex flex-col gap-[5px] rounded-[5px] border border-accent bg-background p-[5px]"
+		class="fixed z-50"
 		style:top={`${menu.top}px`}
 		style:left={menu.mine ? undefined : `${menu.left}px`}
 		style:right={menu.mine ? `${menu.right}px` : undefined}
-		style:transform={menu.above ? 'translateY(calc(-100% - 5px))' : 'translateY(5px)'}
+		style:transform={above ? 'translateY(calc(-100% - 5px))' : 'translateY(5px)'}
 	>
-		<div class="flex gap-[2px]">
-			{#each QUICK_REACTIONS as emoji}
-				<button
-					type="button"
-					role="menuitem"
-					class="flex size-9 cursor-pointer items-center justify-center rounded-[5px] text-[1.3em] outline-none hover:bg-white/10 focus-visible:bg-white/10 {mineEmoji ===
-					emoji
-						? 'bg-accent/30'
-						: ''}"
-					aria-label={mineEmoji === emoji ? `Remove ${emoji}` : `React with ${emoji}`}
-					onclick={() => react(current, emoji)}>{emoji}</button
-				>
-			{/each}
-		</div>
-		<div class="flex flex-col border-t border-line pt-[5px] text-[0.9em]">
-			<button
-				type="button"
-				role="menuitem"
-				class="cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left outline-none hover:bg-white/5"
-				onclick={() => startReply(current)}>Reply</button
-			>
-			{#if current.content}
-				<button
-					type="button"
-					role="menuitem"
-					class="cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left outline-none hover:bg-white/5"
-					onclick={() => copyText(current)}>Copy</button
-				>
+		<div
+			role="menu"
+			tabindex="-1"
+			aria-label="Message options"
+			onmousedown={keepFocus}
+			class="flex w-max max-w-[calc(100vw-20px)] flex-col gap-[5px] rounded-[5px] border border-accent bg-background p-[5px] outline-none"
+			style:transform-origin={`${above ? 'bottom' : 'top'} ${menu.mine ? 'right' : 'left'}`}
+			in:pop={{ above }}
+			out:pop={{ above, leaving: true }}
+		>
+			{#if canWrite}
+				<div class="flex gap-[2px] border-b border-line pb-[5px]">
+					{#each QUICK_REACTIONS as emoji, i}
+						<button
+							type="button"
+							role="menuitem"
+							class="menu-emoji flex size-9 cursor-pointer items-center justify-center rounded-[5px] text-[1.3em] outline-none transition-[scale,background-color] duration-150 hover:scale-120 hover:bg-white/10 focus-visible:bg-white/10 active:scale-95 {mineEmoji ===
+							emoji
+								? 'bg-accent/30'
+								: ''}"
+							style:--i={i}
+							aria-label={mineEmoji === emoji ? `Remove ${emoji}` : `React with ${emoji}`}
+							onclick={() => react(current, emoji)}>{emoji}</button
+						>
+					{/each}
+				</div>
 			{/if}
-			{#if menu.mine}
-				<button
-					type="button"
-					role="menuitem"
-					class="cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left text-danger outline-none hover:bg-white/5"
-					onclick={() => {
-						menu = null;
-						deleteMessage(current);
-					}}>Delete</button
-				>
-			{/if}
+			<div class="flex min-w-44 flex-col text-[0.9em]">
+				{#each menuActions(current, menu) as action, i (action.label)}
+					<button
+						type="button"
+						role="menuitem"
+						class="menu-item flex cursor-pointer items-center gap-2.5 rounded-[5px] px-2.5 py-[7px] text-left outline-none transition-colors duration-150 hover:bg-white/5 focus-visible:bg-white/5 {action.icon ===
+						'delete'
+							? 'text-danger'
+							: ''}"
+						style:--i={i}
+						onclick={action.run}
+						><svg
+							xmlns="http://www.w3.org/2000/svg"
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="2"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							aria-hidden="true"
+							>{#if action.icon === 'reply'}<path d="M9 14 4 9l5-5" /><path
+									d="M4 9h11a5 5 0 0 1 5 5v6"
+								/>{:else if action.icon === 'edit'}<path d="M12 20h9" /><path
+									d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"
+								/>{:else if action.icon === 'copy'}<rect
+									x="9"
+									y="9"
+									width="13"
+									height="13"
+									rx="2"
+								/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />{:else}<path
+									d="M3 6h18"
+								/><path d="M8 6V4h8v2" /><path
+									d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
+								/><path d="M10 11v6" /><path d="M14 11v6" />{/if}</svg
+						>{action.label}</button
+					>
+				{/each}
+			</div>
 		</div>
 	</div>
 {/if}
@@ -953,16 +1240,27 @@
 	</div>
 {/if}
 
-<!-- 120px: the fixed header's offset and the padding of the layout's main column -->
+<!-- 120px: the fixed header's offset and the padding of the layout's main column; narrow screens
+	hide the header in a chat (+layout), leaving only the padding -->
 <div
-	class="flex h-[calc(100dvh-120px)] flex-col gap-2.5"
-	style:height={viewportHeight ? `${viewportHeight - 120}px` : undefined}
+	class="flex h-[calc(var(--vh,100dvh)-120px)] flex-col gap-2.5 max-lg:h-[calc(var(--vh,100dvh)-40px)]"
+	style:--vh={viewportHeight ? `${viewportHeight}px` : undefined}
 >
 	<div class="flex items-center gap-2.5 border-b border-line pb-2.5">
+		<!-- the header (and its unread pill) is hidden here on narrow screens, so the way back shows it -->
 		<a
-			class="px-1 text-[1.4em] text-inherit hover:no-underline"
+			class="flex shrink-0 items-center gap-[5px] px-1 text-inherit hover:no-underline lg:hidden"
 			href="/messages"
-			title="Back to messages">&larr;</a
+			title={$messagesCount > 0
+				? `Back to messages (${$messagesCount} unread)`
+				: 'Back to messages'}
+			><span class="text-[1.4em]">&larr;</span>
+			{#if $messagesCount > 0}
+				<span
+					class="rounded-full bg-accent px-1.5 text-[0.75em] leading-5 font-bold text-background"
+					>{unreadLabel}</span
+				>
+			{/if}</a
 		>
 		{#if group}
 			<a
@@ -987,50 +1285,77 @@
 				<p class="truncate text-[0.85rem] opacity-70">@{peer.username}</p>
 			</a>
 		{/if}
-		<div class="ml-auto flex shrink-0 items-center gap-2.5 text-[0.85rem]">
+		<div class="relative ml-auto flex shrink-0" bind:this={options}>
 			<button
 				type="button"
-				class="flex cursor-pointer items-center gap-[5px] opacity-70 outline-none hover:opacity-100"
-				title={muted
-					? 'Muted: no notifications, not counted in the badge'
-					: 'Stop notifications from this chat'}
-				onclick={toggleMute}
-				>{#if muted}<svg
-						xmlns="http://www.w3.org/2000/svg"
-						width="1em"
-						height="1em"
-						viewBox="0 0 24 24"
-						fill="none"
-						stroke="currentColor"
-						stroke-width="2"
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						aria-hidden="true"
-						><path d="M13.7 21a2 2 0 0 1-3.4 0" /><path d="M18.6 13A17.9 17.9 0 0 1 18 8" /><path
-							d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"
-						/><path d="M18 8a6 6 0 0 0-9.3-5" /><path d="M2 2l20 20" /></svg
-					>Unmute{:else}Mute{/if}</button
+				class="flex size-8 cursor-pointer items-center justify-center rounded-[5px] opacity-70 outline-none hover:opacity-100 focus-visible:opacity-100"
+				title="Chat options"
+				aria-label="Chat options"
+				aria-haspopup="menu"
+				aria-expanded={optionsOpen}
+				onclick={() => (optionsOpen = !optionsOpen)}
+				><svg
+					xmlns="http://www.w3.org/2000/svg"
+					width="1.2em"
+					height="1.2em"
+					viewBox="0 0 24 24"
+					fill="currentColor"
+					aria-hidden="true"
+					><circle cx="12" cy="5" r="2" /><circle cx="12" cy="12" r="2" /><circle
+						cx="12"
+						cy="19"
+						r="2"
+					/></svg
+				></button
 			>
-			{#if group}
-				<a
-					class="text-inherit opacity-70 hover:opacity-100"
-					href={`/messages/groups/${group.id}/settings`}>Info</a
+			{#if optionsOpen}
+				<div
+					class="absolute top-full right-0 z-50 mt-[5px] flex w-max flex-col rounded-[5px] border border-accent bg-background p-[5px] text-[0.9em]"
+					role="menu"
 				>
-			{:else}
-				<button
-					type="button"
-					class="cursor-pointer opacity-70 outline-none hover:opacity-100"
-					onclick={toggleBlock}>{blockedByMe ? 'Unblock' : 'Block'}</button
-				>
+					<button
+						type="button"
+						role="menuitem"
+						class="flex items-center gap-[5px] cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left text-inherit outline-none hover:bg-white/5 hover:no-underline focus-visible:bg-white/5"
+						title={muted
+							? 'Muted: no notifications, not counted in the badge'
+							: 'Stop notifications from this chat'}
+						onclick={() => {
+							optionsOpen = false;
+							toggleMute();
+						}}>{muted ? 'Unmute' : 'Mute'}</button
+					>
+					{#if group}
+						<a
+							role="menuitem"
+							class="cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left text-inherit outline-none hover:bg-white/5 hover:no-underline focus-visible:bg-white/5"
+							href={`/messages/groups/${group.id}/settings`}>Info</a
+						>
+					{:else}
+						<button
+							type="button"
+							role="menuitem"
+							class="cursor-pointer rounded-[5px] px-2.5 py-[5px] text-left text-inherit outline-none hover:bg-white/5 hover:no-underline focus-visible:bg-white/5 {blockedByMe
+								? ''
+								: 'text-danger'}"
+							onclick={() => {
+								optionsOpen = false;
+								toggleBlock();
+							}}>{blockedByMe ? 'Unblock' : 'Block'}</button
+						>
+					{/if}
+				</div>
 			{/if}
 		</div>
 	</div>
 
 	<!-- svelte-ignore a11y_no_noninteractive_element_interactions (only keeps the keyboard open) -->
 	<div
-		class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-x-hidden overflow-y-auto overscroll-contain"
+		class="flex min-h-0 flex-1 flex-col gap-[5px] overflow-x-hidden overflow-y-auto overscroll-contain"
 		bind:this={list}
 		onscroll={onScroll}
+		onwheel={stopGlide}
+		ontouchstart={stopGlide}
 		onmousedown={keepFocusOnTouch}
 		role="log"
 		onloadcapture={onMediaLoad}
@@ -1056,8 +1381,14 @@
 				</p>
 			{:else}
 				<!-- in groups, name who wrote a run of messages from someone else -->
-				{#if author && !mine && (newDay || isEvent(messages[index - 1]) || senderOf(messages[index - 1]) !== author.username)}
-					<div class="mt-1.5 flex items-center gap-[5px] self-start">
+				{@const named =
+					!!author &&
+					!mine &&
+					(newDay ||
+						isEvent(messages[index - 1]) ||
+						senderOf(messages[index - 1]) !== author.username)}
+				{#if author && named}
+					<div class="mt-2.5 flex items-center gap-[5px] self-start">
 						<Avatar user={author} size={24} />
 						<a class="text-[0.8em] font-bold text-inherit" href={`/@${author.username}`}
 							>{author.name}</a
@@ -1065,11 +1396,17 @@
 					</div>
 				{/if}
 				{@const swiped = swipe?.id === message.id ? swipe.dx : 0}
+				<!-- the time sits on the text's last line when it fits, like on Telegram -->
+				{@const inlineMeta = !!message.content && !message.linked_post}
 				<div
 					id={`message-${message.id}`}
-					class="group/row relative flex max-w-[85%] flex-col {mine
-						? 'items-end self-end'
-						: 'items-start self-start'}"
+					style:animation-delay={message.id in rising ? `${rising[message.id]}ms` : undefined}
+					class="group/row relative flex max-w-[85%] flex-col {message.id in rising
+						? 'send-in'
+						: ''} {mine ? 'items-end self-end' : 'items-start self-start'} {!named &&
+					startsRun(index)
+						? 'mt-2.5'
+						: ''} {mine ? 'mr-2' : 'ml-2'}"
 				>
 					{#if swiped > 0}
 						<!-- the reply arrow uncovered by swiping, solid once letting go replies -->
@@ -1104,17 +1441,31 @@
 							e.preventDefault();
 							e.stopPropagation();
 						}}
-						oncontextmenu={(e) => {
-							// a long press opens the message menu instead
-							if (gesture || suppressClick) e.preventDefault();
-						}}
+						oncontextmenu={(e) => onContextMenu(e, message)}
 						role="group"
 					>
 						<div
-							class="flex min-w-0 flex-col gap-1.5 rounded-[10px] p-2.5 outline-offset-2 pointer-coarse:select-none [-webkit-touch-callout:none] {mine
+							class="relative flex min-w-0 flex-col gap-1.5 rounded-[10px] p-2.5 outline-offset-2 transition-[scale] duration-200 ease-out pointer-coarse:select-none [-webkit-touch-callout:none] {mine
 								? 'bg-accent text-background'
-								: 'bg-white/10'} {highlighted === message.id ? 'outline-2 outline-foreground' : ''}"
+								: 'bg-white/10'} {highlighted === message.id
+								? 'outline-2 outline-foreground'
+								: ''} {menu?.message.id === message.id ? 'scale-[1.02]' : ''} {editing?.id ===
+							message.id
+								? 'outline-2 outline-dashed outline-foreground/60'
+								: ''} {bubbleShape(mine, joinedAbove(index), joinedBelow(index))}"
 						>
+							{#if !joinedBelow(index)}
+								<!-- the tail of a run's last bubble, in the bubble's own color -->
+								<svg
+									aria-hidden="true"
+									class="absolute bottom-0 {mine
+										? '-right-2 -scale-x-100 fill-accent'
+										: '-left-2 fill-white/10'}"
+									width="8"
+									height="14"
+									viewBox="0 0 8 14"><path d="M8 0C8 7 6 11 0 14h8Z" /></svg
+								>
+							{/if}
 							{#if message.reply_to}
 								{@const reply = message.reply_to}
 								<button
@@ -1166,7 +1517,12 @@
 															: ''}"
 														href={`/@${piece.username}`}
 														use:profileHover={piece.username.toLowerCase()}>@{piece.username}</a
-													>{/if}{/each}{/if}{/each}
+													>{/if}{/each}{/if}{/each}{#if inlineMeta}<span
+											aria-hidden="true"
+											class="invisible inline-flex gap-2 pl-2.5 text-[0.7rem] select-none"
+											>{#if message.edited_at}<span>edited</span>{/if}<span>{timeOf(message)}</span
+											></span
+										>{/if}
 								</p>
 							{/if}
 							{#if message.linked_post}
@@ -1175,28 +1531,16 @@
 									<QuoteCard quote={message.linked_post} />
 								</div>
 							{/if}
-							<div class="flex items-center justify-end gap-2 text-[0.7rem]">
-								{#if mine}
-									<button
-										type="button"
-										class="cursor-pointer opacity-60 outline-none hover:opacity-100"
-										aria-label="Delete message"
-										title="Delete message"
-										onclick={() => deleteMessage(message)}
-										><svg
-											xmlns="http://www.w3.org/2000/svg"
-											width="1em"
-											height="1em"
-											viewBox="0 0 24 24"
-											fill="none"
-											stroke="currentColor"
-											stroke-width="2"
-											stroke-linecap="round"
-											stroke-linejoin="round"
-											><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path
-												d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"
-											/><path d="M10 11v6" /><path d="M14 11v6" /></svg
-										></button
+							<!-- over the space the invisible copy at the end of the text keeps free -->
+							<div
+								class="flex items-center justify-end gap-2 text-[0.7rem] {inlineMeta
+									? 'absolute right-2.5 bottom-2'
+									: ''}"
+							>
+								{#if message.edited_at}
+									<span
+										class="opacity-60"
+										title={`Edited ${new Date(message.edited_at).toLocaleString()}`}>edited</span
 									>
 								{/if}
 								<!-- the day is on the separator, the full date on hover -->
@@ -1207,35 +1551,40 @@
 								>
 							</div>
 						</div>
-						{#if canWrite}
-							<!-- with a mouse: react and reply next to the message, on hover -->
-							<div
-								class="flex shrink-0 items-center opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:hidden"
+						<!-- with a mouse: the menu and reply next to the message, on hover -->
+						<div
+							class="flex shrink-0 items-center opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 focus-within:opacity-100 pointer-coarse:hidden {menu
+								?.message.id === message.id
+								? 'opacity-100'
+								: ''}"
+						>
+							<button
+								type="button"
+								class="flex size-8 cursor-pointer items-center justify-center rounded-full opacity-70 outline-none hover:bg-white/10 hover:opacity-100"
+								aria-label="Message options"
+								title="React, reply, edit, copy or delete"
+								aria-haspopup="menu"
+								aria-expanded={menu?.message.id === message.id}
+								data-menu-trigger
+								onclick={(e) => {
+									const bubble = e.currentTarget.parentElement?.previousElementSibling;
+									if (bubble instanceof HTMLElement) toggleMenu(message, bubble);
+								}}
+								><svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="18"
+									height="18"
+									viewBox="0 0 24 24"
+									fill="#d9d9d9"
+									aria-hidden="true"
+									><circle cx="5" cy="12" r="1.8" /><circle cx="12" cy="12" r="1.8" /><circle
+										cx="19"
+										cy="12"
+										r="1.8"
+									/></svg
+								></button
 							>
-								<button
-									type="button"
-									class="flex size-8 cursor-pointer items-center justify-center rounded-full opacity-70 outline-none hover:bg-white/10 hover:opacity-100"
-									aria-label="React"
-									title="React"
-									onclick={(e) => {
-										const bubble = e.currentTarget.parentElement?.previousElementSibling;
-										if (bubble instanceof HTMLElement) openMenu(message, bubble);
-									}}
-									><svg
-										xmlns="http://www.w3.org/2000/svg"
-										width="18"
-										height="18"
-										viewBox="0 0 24 24"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										><circle cx="12" cy="12" r="10" /><path d="M8 14s1.5 2 4 2 4-2 4-2" /><path
-											d="M9 9h.01"
-										/><path d="M15 9h.01" /></svg
-									></button
-								>
+							{#if canWrite}
 								<button
 									type="button"
 									class="flex size-8 cursor-pointer items-center justify-center rounded-full opacity-70 outline-none hover:bg-white/10 hover:opacity-100"
@@ -1252,11 +1601,12 @@
 										stroke-width="2"
 										stroke-linecap="round"
 										stroke-linejoin="round"
+										aria-hidden="true"
 										><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 5 5v6" /></svg
 									></button
 								>
-							</div>
-						{/if}
+							{/if}
+						</div>
 					</div>
 					{#if message.reactions.length > 0}
 						<div class="relative z-1 -mt-2 flex flex-wrap gap-[5px] px-2.5" data-reactions>
@@ -1287,10 +1637,35 @@
 				<p class="m-auto text-center text-muted">Say hi to {group?.name ?? peer?.name}.</p>
 			{/if}
 		{/each}
-		{#each pending as draft (draft.key)}
+		{#each pending as draft, i (draft.key)}
+			{@const above = i > 0 || (messages.length > 0 && isMine(messages[messages.length - 1]))}
+			{@const below = i < pending.length - 1}
 			<!-- on its way: dimmed, with the loading mark where the time goes -->
-			<div class="flex max-w-[85%] flex-col items-end self-end opacity-70" aria-busy="true">
-				<div class="flex min-w-0 flex-col gap-1.5 rounded-[10px] bg-accent p-2.5 text-background">
+			<div
+				class="send-in mr-2 flex max-w-[85%] flex-col items-end self-end opacity-70 {i === 0 &&
+				!above &&
+				messages.length > 0
+					? 'mt-2.5'
+					: ''}"
+				aria-busy="true"
+			>
+				<div
+					class="relative flex min-w-0 flex-col gap-1.5 rounded-[10px] bg-accent p-2.5 text-background {bubbleShape(
+						true,
+						above,
+						below
+					)}"
+				>
+					{#if !below}
+						<!-- the tail of a run's last bubble, in the bubble's own color -->
+						<svg
+							aria-hidden="true"
+							class="absolute bottom-0 -right-2 -scale-x-100 fill-accent"
+							width="8"
+							height="14"
+							viewBox="0 0 8 14"><path d="M8 0C8 7 6 11 0 14h8Z" /></svg
+						>
+					{/if}
 					{#if draft.replyingTo}
 						<div
 							class="flex min-w-0 flex-col rounded-[5px] border-l-2 border-background/60 bg-black/15 px-2.5 py-[5px] text-[0.85em]"
@@ -1374,6 +1749,33 @@
 		</div>
 	{/if}
 
+	{#if editing && canWrite}
+		<div
+			class="edit-bar flex items-center gap-2.5 border-l-2 border-accent pl-2.5"
+			role="presentation"
+			onmousedown={keepFocus}
+		>
+			<button
+				type="button"
+				class="min-w-0 flex-1 cursor-pointer text-left text-[0.85em] outline-none"
+				title="Go to the message"
+				onclick={() => editing && jumpTo(editing.id)}
+			>
+				<p class="font-bold text-accent">Editing message</p>
+				<p class="truncate text-muted">
+					{previewOf({ content: editing.content, images: editing.images?.length ?? 0 })}
+				</p>
+			</button>
+			<button
+				type="button"
+				class="cursor-pointer px-2.5 text-[1.2em] leading-none opacity-70 outline-none hover:opacity-100"
+				aria-label="Cancel editing"
+				title="Cancel editing"
+				onclick={stopEditing}>×</button
+			>
+		</div>
+	{/if}
+
 	{#if replyingTo && canWrite}
 		<div
 			class="flex items-center gap-2.5 border-l-2 border-accent pl-2.5"
@@ -1407,7 +1809,7 @@
 		<p class="p-2.5 text-center text-muted">You can't message this user.</p>
 	{:else}
 		<form
-			class="flex"
+			class="flex items-end gap-2.5"
 			onsubmit={(e) => {
 				e.preventDefault();
 				send();
@@ -1422,31 +1824,19 @@
 				multiple
 				hidden
 			/>
-			<MentionInput
-				bind:value={content}
-				bind:element={textarea}
-				name=""
-				placeholder="Write a message"
-				label="Write a message"
-				maxHeight="max-h-32"
-				placement="above"
-				source={mentionSource}
-				onkeydown={onKeydown}
-				oninput={onInput}
-			/>
 			<button
 				type="button"
 				title="Attach images"
 				aria-label="Attach images"
-				disabled={attachments.length >= MAX_IMAGES}
+				disabled={attachments.length >= MAX_IMAGES || !!editing}
 				onclick={() => fileInput?.click()}
-				class="flex cursor-pointer items-end border-b border-foreground p-2.5 outline-none disabled:cursor-default disabled:opacity-40"
+				class="flex size-[46px] shrink-0 cursor-pointer items-center justify-center rounded-[10px] border border-line bg-black/70 outline-none backdrop-blur-[2px] hover:border-accent focus-visible:border-accent disabled:cursor-default disabled:opacity-40 disabled:hover:border-line"
 				><svg
 					xmlns="http://www.w3.org/2000/svg"
 					height="20px"
 					viewBox="0 0 24 24"
 					fill="none"
-					stroke="#d9d9d9"
+					stroke="currentColor"
 					stroke-width="1.8"
 					stroke-linecap="round"
 					stroke-linejoin="round"
@@ -1457,18 +1847,106 @@
 					/><path d="M21 15l-5-5L5 21" /></svg
 				></button
 			>
+			<div
+				class="flex min-h-[46px] min-w-0 flex-1 items-center rounded-[10px] border border-line bg-black/70 backdrop-blur-[2px] focus-within:border-accent"
+			>
+				<MentionInput
+					bind:value={content}
+					bind:element={textarea}
+					name=""
+					placeholder={editing ? 'Edit your message' : 'Write a message'}
+					label={editing ? 'Edit your message' : 'Write a message'}
+					maxHeight="max-h-32"
+					inputClass="bg-transparent px-2.5 py-2.5 outline-none"
+					placement="above"
+					source={mentionSource}
+					onkeydown={onKeydown}
+					oninput={onInput}
+				/>
+			</div>
 			<button
 				type="submit"
-				title="Send"
-				aria-label="Send"
-				class="flex cursor-pointer items-end border-b border-foreground p-2.5 outline-none"
+				title={editing ? 'Save' : 'Send'}
+				aria-label={editing ? 'Save' : 'Send'}
+				class="flex size-[46px] shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-[10px] bg-accent text-background outline-none hover:brightness-110 focus-visible:brightness-110"
 				onmousedown={keepFocus}
-				><svg fill="#d9d9d9" xmlns="http://www.w3.org/2000/svg" height="20px" viewBox="0 0 512 512"
-					><!--! Font Awesome Free 6.4.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path
-						d="M16.1 260.2c-22.6 12.9-20.5 47.3 3.6 57.3L160 376V479.3c0 18.1 14.6 32.7 32.7 32.7c9.7 0 18.9-4.3 25.1-11.8l62-74.3 123.9 51.6c18.9 7.9 40.8-4.5 43.9-24.7l64-416c1.9-12.1-3.4-24.3-13.5-31.2s-23.3-7.5-34-1.4l-448 256zm52.1 25.5L409.7 90.6 190.1 336l1.2 1L68.2 285.7zM403.3 425.4L236.7 355.9 450.8 116.6 403.3 425.4z"
-					/></svg
-				></button
+				>{#key sends}<svg
+						class={sends > 0 ? 'send-fly' : ''}
+						fill="currentColor"
+						xmlns="http://www.w3.org/2000/svg"
+						height="18px"
+						viewBox="0 0 512 512"
+						><!--! Font Awesome Free 6.4.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license (Commercial License) Copyright 2023 Fonticons, Inc. --><path
+							d="M16.1 260.2c-22.6 12.9-20.5 47.3 3.6 57.3L160 376V479.3c0 18.1 14.6 32.7 32.7 32.7c9.7 0 18.9-4.3 25.1-11.8l62-74.3 123.9 51.6c18.9 7.9 40.8-4.5 43.9-24.7l64-416c1.9-12.1-3.4-24.3-13.5-31.2s-23.3-7.5-34-1.4l-448 256zm52.1 25.5L409.7 90.6 190.1 336l1.2 1L68.2 285.7zM403.3 425.4L236.7 355.9 450.8 116.6 403.3 425.4z"
+						/></svg
+					>{/key}</button
 			>
 		</form>
 	{/if}
 </div>
+
+<style>
+	/* the menu's rows and reactions arrive one after the other, just behind the menu itself */
+	.menu-item {
+		animation: menu-item-in 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+		animation-delay: calc(60ms + var(--i) * 35ms);
+	}
+	.menu-emoji {
+		animation: menu-emoji-in 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+		animation-delay: calc(30ms + var(--i) * 25ms);
+	}
+	.edit-bar {
+		animation: menu-item-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+	}
+	/* a message just sent pops out of the corner its tail is on. Only scaled, with the bottom edge
+		fixed: anything reaching below the list would make it taller for a moment, and the scroll to
+		the bottom would follow it there and back */
+	.send-in {
+		transform-origin: bottom right;
+		animation: send-in 380ms cubic-bezier(0.34, 1.4, 0.64, 1) backwards;
+	}
+	@keyframes send-in {
+		from {
+			opacity: 0;
+			transform: scale(0.5);
+		}
+	}
+	/* the paper plane flies off to the top right and a new one comes back in from the bottom left */
+	.send-fly {
+		animation: send-fly 420ms cubic-bezier(0.45, 0, 0.25, 1);
+	}
+	@keyframes send-fly {
+		45% {
+			opacity: 1;
+			transform: translate(26px, -26px) scale(0.8);
+		}
+		46% {
+			opacity: 0;
+			transform: translate(-26px, 26px) scale(0.8);
+		}
+		55% {
+			opacity: 1;
+		}
+	}
+	@keyframes menu-item-in {
+		from {
+			opacity: 0;
+			transform: translateY(4px);
+		}
+	}
+	@keyframes menu-emoji-in {
+		from {
+			opacity: 0;
+			transform: scale(0.4) translateY(6px);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.menu-item,
+		.menu-emoji,
+		.edit-bar,
+		.send-in,
+		.send-fly {
+			animation: none;
+		}
+	}
+</style>

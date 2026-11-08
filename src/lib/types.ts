@@ -172,6 +172,8 @@ export type ChatMessage = {
 	/** URL paths of uploaded images */
 	images: string[];
 	created_at: Date;
+	/** when the sender last changed the text, null if never */
+	edited_at: Date | null;
 	/** the first post on this instance linked in the content, shown like a quote */
 	linked_post: QuotedPost | null;
 	/** the message this one answers, null when it isn't a reply or that message was deleted */
@@ -228,6 +230,8 @@ export type GroupMessage = {
 	/** URL paths of uploaded images */
 	images: string[];
 	created_at: Date;
+	/** when the sender last changed the text, null if never */
+	edited_at: Date | null;
 	/** the first post on this instance linked in the content, shown like a quote */
 	linked_post: QuotedPost | null;
 	/** the message this one answers, null when it isn't a reply or that message was deleted */

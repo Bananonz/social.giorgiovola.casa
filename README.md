@@ -203,28 +203,28 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 
 **Messages and groups**
 
-| method           | path                                                    | who                   |                                                                                       |
-| ---------------- | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
-| `GET`            | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
-| `GET`            | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
-| `GET`            | `/api/v1/conversations/:username`                       | signed in             | peer, blocks and mute state                                                           |
-| `GET` / `POST`   | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
-| `DELETE`         | `/api/v1/conversations/:username/messages/:id`          | sender                | delete your message                                                                   |
-| `PUT` / `DELETE` | `/api/v1/conversations/:username/messages/:id/reaction` | signed in             | react `{ emoji }` / remove it                                                         |
-| `POST`           | `/api/v1/conversations/:username/read`                  | signed in             | mark read                                                                             |
-| `PUT` / `DELETE` | `/api/v1/conversations/:username/mute`                  | signed in             | mute / unmute                                                                         |
-| `POST`           | `/api/v1/conversations/:username/typing`                | signed in             | typing indicator                                                                      |
-| `GET` / `POST`   | `/api/v1/groups`                                        | signed in / not muted | your groups / create `{ name, members }`                                              |
-| `GET` / `PATCH`  | `/api/v1/groups/:id`                                    | member                | name, owner, members / rename `{ name }`                                              |
-| `GET` / `POST`   | `/api/v1/groups/:id/messages`                           | member                | messages and events / send                                                            |
-| `DELETE`         | `/api/v1/groups/:id/messages/:messageId`                | sender                | delete your message                                                                   |
-| `PUT` / `DELETE` | `/api/v1/groups/:id/messages/:messageId/reaction`       | member                | react / remove it                                                                     |
-| `POST`           | `/api/v1/groups/:id/read`                               | member                | mark read                                                                             |
-| `PUT` / `DELETE` | `/api/v1/groups/:id/mute`                               | member                | mute / unmute                                                                         |
-| `POST`           | `/api/v1/groups/:id/members`                            | member                | add `{ usernames }`                                                                   |
-| `DELETE`         | `/api/v1/groups/:id/members/:username`                  | owner (or yourself)   | remove someone, or leave                                                              |
-| `POST`           | `/api/v1/groups/:id/leave`                              | member                | leave                                                                                 |
-| `POST`           | `/api/v1/groups/:id/typing`                             | member                | typing indicator                                                                      |
+| method             | path                                                    | who                   |                                                                                       |
+| ------------------ | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
+| `GET`              | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
+| `GET`              | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
+| `GET`              | `/api/v1/conversations/:username`                       | signed in             | peer, blocks and mute state                                                           |
+| `GET` / `POST`     | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
+| `PATCH` / `DELETE` | `/api/v1/conversations/:username/messages/:id`          | sender                | edit your message `{ content }` (within an hour) / delete it                          |
+| `PUT` / `DELETE`   | `/api/v1/conversations/:username/messages/:id/reaction` | signed in             | react `{ emoji }` / remove it                                                         |
+| `POST`             | `/api/v1/conversations/:username/read`                  | signed in             | mark read                                                                             |
+| `PUT` / `DELETE`   | `/api/v1/conversations/:username/mute`                  | signed in             | mute / unmute                                                                         |
+| `POST`             | `/api/v1/conversations/:username/typing`                | signed in             | typing indicator                                                                      |
+| `GET` / `POST`     | `/api/v1/groups`                                        | signed in / not muted | your groups / create `{ name, members }`                                              |
+| `GET` / `PATCH`    | `/api/v1/groups/:id`                                    | member                | name, owner, members / rename `{ name }`                                              |
+| `GET` / `POST`     | `/api/v1/groups/:id/messages`                           | member                | messages and events / send                                                            |
+| `PATCH` / `DELETE` | `/api/v1/groups/:id/messages/:messageId`                | sender                | edit your message `{ content }` (within an hour) / delete it                          |
+| `PUT` / `DELETE`   | `/api/v1/groups/:id/messages/:messageId/reaction`       | member                | react / remove it                                                                     |
+| `POST`             | `/api/v1/groups/:id/read`                               | member                | mark read                                                                             |
+| `PUT` / `DELETE`   | `/api/v1/groups/:id/mute`                               | member                | mute / unmute                                                                         |
+| `POST`             | `/api/v1/groups/:id/members`                            | member                | add `{ usernames }`                                                                   |
+| `DELETE`           | `/api/v1/groups/:id/members/:username`                  | owner (or yourself)   | remove someone, or leave                                                              |
+| `POST`             | `/api/v1/groups/:id/leave`                              | member                | leave                                                                                 |
+| `POST`             | `/api/v1/groups/:id/typing`                             | member                | typing indicator                                                                      |
 
 **Moderation and realtime**
 

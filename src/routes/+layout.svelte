@@ -18,6 +18,12 @@
 	import { syncPush } from '#lib/push.js';
 
 	export let data: LayoutData;
+
+	// an open chat fills the screen: narrow screens drop the header for it (its back arrow shows
+	// the unread count instead)
+	$: chat = page.route.id === '/messages/[username]' || page.route.id === '/messages/groups/[id]';
+	// the messages index is wide too: conversation list beside an empty chat
+	$: wide = chat || page.route.id === '/messages';
 	$user = data.user;
 	$notisCount = data.notisCount;
 	$messagesCount = data.messagesCount;
@@ -98,7 +104,9 @@
 	});
 </script>
 
-<Header />
+<div class={chat ? 'max-lg:hidden' : ''}>
+	<Header />
+</div>
 <ImageViewer />
 <ProfileCard />
 <ShareDialog />
@@ -200,8 +208,10 @@
 	{/if}
 	<link rel="canonical" href={`${PUBLIC_URL}${page.url.pathname}`} />
 </svelte:head>
-<main class="relative mt-20 flex justify-center">
-	<div class="w-full max-w-160 p-5">
+<main class="relative mt-20 flex justify-center {chat ? 'max-lg:mt-0' : ''}">
+	<!-- an open chat takes the full width, and sits beside the conversation list on wide screens
+		(messages/+layout) -->
+	<div class="w-full p-5 {wide ? 'lg:max-w-260' : 'max-w-160'}">
 		<slot />
 	</div>
 	{#if navigating.to}
