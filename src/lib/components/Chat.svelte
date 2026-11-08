@@ -259,8 +259,13 @@
 
 	const myReaction = (m: Message) => m.reactions.find((r) => r.username === $user?.username);
 
-	const setReactions = (id: number, reactions: MessageReaction[]) =>
-		(messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m)));
+	/** Updates a message's reactions; reactions under the latest message keep it in view. */
+	async function setReactions(id: number, reactions: MessageReaction[]) {
+		const follow = isAtBottom();
+		messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m));
+		await tick();
+		if (follow) glideToBottom();
+	}
 
 	/** Sets your reaction to a message; picking the one you already have takes it back. */
 	async function react(message: Message, emoji: string) {
@@ -1485,7 +1490,13 @@
 								</button>
 							{/if}
 							{#if message.images?.length}
-								<div class="grid gap-1.5 {message.images.length > 1 ? 'grid-cols-2' : ''}">
+								<!-- sized against the viewport, not the bubble: the bubble fits its content, and
+								     firefox shrinks an image sized in % of such a box to nearly nothing -->
+								<div
+									class="grid max-w-full gap-1.5 {message.images.length > 1
+										? 'w-[min(320px,60vw)] grid-cols-2'
+										: ''}"
+								>
 									{#each message.images as image, i}
 										<button
 											type="button"
@@ -1496,7 +1507,7 @@
 											<img
 												class={message.images.length > 1
 													? 'aspect-square w-full object-cover'
-													: 'max-h-[360px] max-w-full object-contain'}
+													: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}
 												src={image}
 												alt=""
 												loading="lazy"
@@ -1687,13 +1698,18 @@
 						</div>
 					{/if}
 					{#if draft.attachments.length}
-						<div class="grid gap-1.5 {draft.attachments.length > 1 ? 'grid-cols-2' : ''}">
+						<!-- sized like a sent message's images, see there -->
+						<div
+							class="grid max-w-full gap-1.5 {draft.attachments.length > 1
+								? 'w-[min(320px,60vw)] grid-cols-2'
+								: ''}"
+						>
 							{#each draft.attachments as attachment (attachment.url)}
 								<div class="relative {draft.attachments.length > 1 ? '' : 'w-fit'}">
 									<img
 										class="rounded-[5px] {draft.attachments.length > 1
 											? 'aspect-square w-full object-cover'
-											: 'max-h-[360px] max-w-full object-contain'}"
+											: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}"
 										src={attachment.url}
 										alt=""
 										draggable="false"

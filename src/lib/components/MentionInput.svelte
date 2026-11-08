@@ -63,8 +63,12 @@
 		void value;
 		if (!input) return;
 		input.style.height = 'auto';
+		input.style.overflowY = 'hidden';
 		// scrollHeight leaves out the bottom border
 		input.style.height = `${input.scrollHeight + input.offsetHeight - input.clientHeight}px`;
+		// only scroll once the height limit cuts the text off: scrollHeight is rounded, so on some
+		// browsers (chrome android) text that fits still overflows by a fraction of a pixel
+		if (input.scrollHeight > input.clientHeight + 1) input.style.overflowY = 'auto';
 	});
 
 	function close() {
@@ -150,7 +154,7 @@
 	<textarea
 		bind:this={input}
 		bind:value
-		class="{inputClass} block {maxHeight} w-full resize-none overflow-y-auto wrap-anywhere"
+		class="{inputClass} block {maxHeight} w-full resize-none overflow-hidden wrap-anywhere"
 		rows="1"
 		{name}
 		{required}
