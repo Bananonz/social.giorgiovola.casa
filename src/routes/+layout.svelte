@@ -20,10 +20,12 @@
 	export let data: LayoutData;
 
 	// an open chat fills the screen: narrow screens drop the header for it (its back arrow shows
-	// the unread count instead)
-	$: chat = page.route.id === '/messages/[username]' || page.route.id === '/messages/groups/[id]';
+	// the unread count instead). the layout is legacy syntax, where `$:` doesn't re-run on a
+	// navigation (`page` isn't a local variable), so these are called from the template
+	const isChat = (id: string | null) =>
+		id === '/messages/[username]' || id === '/messages/groups/[id]';
 	// the messages index is wide too: conversation list beside an empty chat
-	$: wide = chat || page.route.id === '/messages';
+	const isWide = (id: string | null) => isChat(id) || id === '/messages';
 	$user = data.user;
 	$notisCount = data.notisCount;
 	$messagesCount = data.messagesCount;
@@ -104,7 +106,7 @@
 	});
 </script>
 
-<div class={chat ? 'max-lg:hidden' : ''}>
+<div class={isChat(page.route.id) ? 'max-lg:hidden' : ''}>
 	<Header />
 </div>
 <ImageViewer />
@@ -208,10 +210,10 @@
 	{/if}
 	<link rel="canonical" href={`${PUBLIC_URL}${page.url.pathname}`} />
 </svelte:head>
-<main class="relative mt-20 flex justify-center {chat ? 'max-lg:mt-0' : ''}">
+<main class="relative mt-20 flex justify-center {isChat(page.route.id) ? 'max-lg:mt-0' : ''}">
 	<!-- an open chat takes the full width, and sits beside the conversation list on wide screens
 		(messages/+layout) -->
-	<div class="w-full p-5 {wide ? 'lg:max-w-260' : 'max-w-160'}">
+	<div class="w-full p-5 {isWide(page.route.id) ? 'lg:max-w-260' : 'max-w-160'}">
 		<slot />
 	</div>
 	{#if navigating.to}
