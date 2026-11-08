@@ -13,7 +13,7 @@ import { publishGroupMessage } from '#lib/server/realtime.js';
 import { LIMITS, parseId } from '#lib/server/validation.js';
 
 // the same bucket as direct messages
-const MAX_MESSAGES = 20;
+const MAX_MESSAGES = 70;
 
 /** The group's messages and events, oldest first: the latest ones, or the ones after `after`. */
 export const GET: RequestHandler = botHandler(async ({ user }, { params, url }) => {

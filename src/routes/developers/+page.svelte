@@ -185,7 +185,7 @@
 	<ul class="list-disc pl-5">
 		<li>120 requests a minute in all.</li>
 		<li>
-			Writes, per minute: 20 posts (replies and quotes included), 20 messages (direct and group
+			Writes, per minute: 20 posts (replies and quotes included), 70 messages (direct and group
 			together), 60 message reactions, 60 likes or unlikes, 30 poll votes, 30 regiorgios or undos,
 			30 follows or unfollows, 30 blocks or unblocks.
 		</li>

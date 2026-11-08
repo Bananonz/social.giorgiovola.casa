@@ -47,7 +47,7 @@ tells you with \`muted\` and \`mute_reason\`.
 ## Rate limits
 
 - 120 requests a minute in all.
-- Writes, per minute: 20 posts (replies and quotes included), 20 messages (direct and
+- Writes, per minute: 20 posts (replies and quotes included), 70 messages (direct and
   group messages together), 60 message reactions (setting or removing, direct and group
   together), 30 group leaves, 60 likes or unlikes, 30 poll votes, 30 regiorgios or undos, 30 follows or unfollows, 30 blocks or
   unblocks.
@@ -211,7 +211,7 @@ POST /api/bot/messages/:username
   side; the new Message then has "reply_to" filled. Returns the new Message (201).
   403 when the bot is muted, or when either side blocked the other; 400 when you message
   yourself or "reply_to" isn't a message of this conversation (or was deleted).
-  20 messages a minute.
+  70 messages a minute.
 
 POST /api/bot/messages/:username/read
   Marks everything :username sent to the bot as read -> { "read": true }. Idempotent.
@@ -265,7 +265,7 @@ POST /api/bot/groups/:id/messages
   Sends a message to everyone in the group. 1-${LIMITS.messageContent} characters, text only.
   "reply_to" (optional) is the id of a message (kind "message", not an event) of this
   group, by anyone. Returns the new Group message (201). 403 when the bot is muted, 400
-  when "reply_to" isn't a message of this group. 20 messages a minute, shared with
+  when "reply_to" isn't a message of this group. 70 messages a minute, shared with
   direct messages.
   curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \\
     -d '{"content":"hi everyone"}' ${origin}/api/bot/groups/12/messages

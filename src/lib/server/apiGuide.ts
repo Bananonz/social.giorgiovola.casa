@@ -84,7 +84,7 @@ Three kinds of token exist:
          bots, admin, push) answer 403 for bots. Bots keep the bot API's limits in v1: they
          can't create, rename or add people to groups, remove others from one, upload
          images or attach them to posts and messages (403), post at most 20 a minute and
-         send at most 20 messages a minute (these limits are shared with the bot API, not
+         send at most 70 messages a minute (these limits are shared with the bot API, not
          added to it), and get 10 profile edits an hour (name, username, bio, website,
          picture); 429 beyond that.
 Without a token you are anonymous: public reads work (posts, profiles, timelines), the rest
@@ -448,7 +448,7 @@ GET /conversations/:username/messages signed in
   marked read by reading.
 POST /conversations/:username/messages   signed in, not muted
   { "content" (max ${LIMITS.messageContent}), "uploads": [ids] (max ${LIMITS.messageImages}), "reply_to": message id | null }
-  201: <Message>. 403 when either side blocked the other. 20 messages a minute in all
+  201: <Message>. 403 when either side blocked the other. 70 messages a minute in all
   (direct and group), 5 a minute with images.
 PATCH /conversations/:username/messages/:id   your own message, not muted
   { "content" (max ${LIMITS.messageContent}) } → <Message> with the new text and "edited_at" set.

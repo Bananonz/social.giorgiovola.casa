@@ -16,7 +16,7 @@ import { LIMITS, parseId } from './validation.js';
 // Sending is limited per sender over direct and group messages together, and messages carrying
 // images (the expensive ones to process and store) have a tighter limit of their own.
 const WINDOW_MS = 60_000;
-const MAX_MESSAGES = 20;
+const MAX_MESSAGES = 70;
 const MAX_IMAGE_MESSAGES = 5;
 
 const keys = (userId: number) => ({ message: `dm:${userId}`, image: `dm-images:${userId}` });

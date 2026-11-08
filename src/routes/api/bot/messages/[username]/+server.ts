@@ -5,7 +5,7 @@ import { isDirectMessageBetween } from '#lib/server/messageReactions.js';
 import { publishMessage } from '#lib/server/realtime.js';
 import { LIMITS, parseId } from '#lib/server/validation.js';
 
-const MAX_MESSAGES = 20;
+const MAX_MESSAGES = 70;
 
 /** The conversation with a user, oldest first: the latest messages, or the ones after `after`. */
 export const GET: RequestHandler = botHandler(async ({ user }, { params, url }) => {
