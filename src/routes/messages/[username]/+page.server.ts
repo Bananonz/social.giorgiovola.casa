@@ -10,10 +10,12 @@ export const load = (async ({ fetch, params, parent }) => {
 	const username = encodeURIComponent(params.username.toLowerCase());
 	if (params.username.toLowerCase() === user.username) redirect(303, '/messages');
 	const [conversation, thread] = await Promise.all([
-		apiGet<{ peer: ChatPeer; block: { me: boolean; peer: boolean }; muted: boolean }>(
-			fetch,
-			`/conversations/${username}`
-		),
+		apiGet<{
+			peer: ChatPeer;
+			block: { me: boolean; peer: boolean };
+			muted: boolean;
+			first_unread_id: number | null;
+		}>(fetch, `/conversations/${username}`),
 		apiGet<{ items: ChatMessage[]; next_cursor: string | null }>(
 			fetch,
 			`/conversations/${username}/messages`

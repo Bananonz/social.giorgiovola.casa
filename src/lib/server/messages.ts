@@ -295,6 +295,21 @@ export async function deleteMessage(senderId: number, id: number, recipientId?: 
 	return row ?? null;
 }
 
+/** The oldest message `peerId` sent to `userId` that is still unread, null when there is none. */
+export async function firstUnreadMessage(userId: number, peerId: number) {
+	const [row] = await db
+		.select({ id: sql<number | null>`MIN(${messages.id})` })
+		.from(messages)
+		.where(
+			and(
+				eq(messages.recipient_id, userId),
+				eq(messages.sender_id, peerId),
+				isNull(messages.read_at)
+			)
+		);
+	return row?.id ?? null;
+}
+
 /** Marks what `peerId` sent to `userId` as read; returns whether anything changed. */
 export async function markThreadRead(userId: number, peerId: number) {
 	const updated = await db

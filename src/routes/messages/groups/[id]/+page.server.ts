@@ -8,17 +8,20 @@ export const load = (async ({ fetch, params, depends }) => {
 	depends('app:group');
 	const id = encodeURIComponent(params.id);
 	const [group, thread] = await Promise.all([
-		apiGet<GroupChat & { muted: boolean }>(fetch, `/groups/${id}`, { optional: true }),
+		apiGet<GroupChat & { muted: boolean; first_unread_id: number | null }>(fetch, `/groups/${id}`, {
+			optional: true
+		}),
 		apiGet<{ items: GroupMessage[]; next_cursor: string | null }>(fetch, `/groups/${id}/messages`, {
 			optional: true
 		})
 	]);
 	// gone, or you were removed from it
 	if (!group || !thread) redirect(303, '/messages');
-	const { muted, ...info } = group;
+	const { muted, first_unread_id, ...info } = group;
 	return {
 		group: info,
 		thread: { messages: thread.items, hasMore: thread.next_cursor !== null },
-		muted
+		muted,
+		firstUnreadId: first_unread_id
 	};
 }) satisfies PageServerLoad;

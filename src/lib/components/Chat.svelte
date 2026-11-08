@@ -47,6 +47,8 @@
 		group?: GroupChat;
 		/** the viewer muted this conversation: no push, not in the badge */
 		muted?: boolean;
+		/** the oldest message the viewer hasn't read: the chat opens there */
+		firstUnreadId?: number | null;
 	};
 
 	let {
@@ -55,7 +57,8 @@
 		peer,
 		block,
 		group,
-		muted: initialMuted = false
+		muted: initialMuted = false,
+		firstUnreadId = null
 	}: Props = $props();
 
 	// the page is keyed on the conversation, so these only need their first value
@@ -73,6 +76,16 @@
 	const groupId = group?.id ?? null;
 	// svelte-ignore state_referenced_locally
 	const peerUsername = peer?.username ?? '';
+	// kept for the whole visit, like on Telegram: the line stays where the unread messages began
+	// svelte-ignore state_referenced_locally
+	const unreadFrom = firstUnreadId;
+	/** the message the "Unread messages" line sits above, -1 when there is none or it isn't loaded */
+	const unreadIndex = $derived(
+		unreadFrom === null || (hasMore && (messages[0]?.id ?? 0) > unreadFrom)
+			? -1
+			: messages.findIndex((m) => m.id >= unreadFrom)
+	);
+	let unreadLine = $state<HTMLElement>();
 
 	let list: HTMLDivElement;
 	let textarea = $state<HTMLTextAreaElement>();
@@ -380,6 +393,7 @@
 
 	/** Scrolls to the message a reply answers, loading older pages until it shows up. */
 	async function jumpTo(id: number) {
+		holdUnread = false;
 		let target = document.getElementById(`message-${id}`);
 		for (let pages = 0; !target && hasMore && pages < 10; pages++) {
 			await loadOlder();
@@ -631,6 +645,7 @@
 	 * aims at where the bottom is on every frame, as the message grows in and the input shrinks.
 	 */
 	function glideToBottom() {
+		holdUnread = false;
 		cancelAnimationFrame(glide);
 		if (reducedMotion()) return scrollToBottom();
 		const from = list.scrollTop;
@@ -643,8 +658,9 @@
 		};
 		glide = requestAnimationFrame(step);
 	}
-	/** Scrolling by hand takes over from a glide. */
+	/** Scrolling by hand takes over from a glide, and from holding the unread line in place. */
 	function stopGlide() {
+		holdUnread = false;
 		cancelAnimationFrame(glide);
 		glide = 0;
 	}
@@ -653,10 +669,44 @@
 	// whether the view follows the bottom: images load after the first scroll and would
 	// otherwise grow the list under the reader, leaving them mid-conversation
 	let stick = true;
+	// whether the view stays on the unread line: it was opened there, and the reader hasn't
+	// scrolled yet while images above it load and push it down
+	let holdUnread = false;
+	// set while the chat is being opened, so scrolling there neither loads history nor marks read
+	let opening = true;
+
+	/** Puts the "Unread messages" line near the top; false when there is none. */
+	function scrollToUnread() {
+		if (!unreadLine) return false;
+		list.scrollTop +=
+			unreadLine.getBoundingClientRect().top - list.getBoundingClientRect().top - 10;
+		return true;
+	}
+
+	/** Keeps the view where it was opened as the list grows: on the unread line, or at the bottom. */
+	function keepPlace() {
+		if (holdUnread) scrollToUnread();
+		else if (stick && !glide) scrollToBottom();
+	}
+
+	/** Opens the conversation where the reader left off: the first unread message, else the bottom. */
+	async function openAtUnread() {
+		scrollToBottom();
+		if (unreadFrom !== null) {
+			// more unread than a page: load back to the first of them
+			for (let pages = 0; hasMore && messages[0]?.id > unreadFrom && pages < 10; pages++)
+				await loadOlder();
+			await tick();
+			holdUnread = scrollToUnread();
+			stick = isAtBottom();
+		}
+		opening = false;
+		markRead();
+	}
 
 	/** Images don't bubble load, so this listens in the capture phase. */
 	function onMediaLoad() {
-		if (stick && !glide) scrollToBottom();
+		keepPlace();
 	}
 
 	/** Lets a sent message finish the rise its pending bubble started. */
@@ -689,7 +739,7 @@
 	/** Marks the thread read, but only while the latest messages are on screen: someone reading older history hasn't seen the new ones. */
 	function markRead() {
 		pendingRead = true;
-		if (document.visibilityState !== 'visible' || !isAtBottom()) return;
+		if (opening || document.visibilityState !== 'visible' || !isAtBottom()) return;
 		pendingRead = false;
 		api(`${threadUrl}/read`, { method: 'POST' }).catch(() => {});
 	}
@@ -697,6 +747,7 @@
 	function onScroll() {
 		menu = null;
 		reactors = null;
+		if (opening) return;
 		if (!glide) stick = isAtBottom();
 		if (list.scrollTop < 100) loadOlder();
 		if (pendingRead && isAtBottom()) markRead();
@@ -1008,8 +1059,7 @@
 		window.addEventListener('dragleave', onDragLeave);
 		window.addEventListener('drop', onDrop);
 		listenTyping();
-		scrollToBottom();
-		markRead();
+		openAtUnread();
 
 		// fit the chat to what's visible above the keyboard: iOS (and Android without
 		// interactive-widget) only shrink the visual viewport, leaving the input under the keyboard
@@ -1026,9 +1076,7 @@
 		vv?.addEventListener('scroll', fit);
 		// the list shrinks when the keyboard opens, the input grows or a bar (reply, typing,
 		// attachments) shows up: keep the latest message in view if it was
-		const resizes = new ResizeObserver(() => {
-			if (stick && !glide) scrollToBottom();
-		});
+		const resizes = new ResizeObserver(keepPlace);
 		resizes.observe(list);
 		const onPointer = (e: PointerEvent) => (touching = e.pointerType !== 'mouse');
 		window.addEventListener('pointerdown', onPointer, true);
@@ -1378,6 +1426,16 @@
 					<hr aria-hidden="true" class="flex-1 border-line" />
 					<span class="font-bold">{dayLabel(dateOf(message))}</span>
 					<hr aria-hidden="true" class="flex-1 border-line" />
+				</div>
+			{/if}
+			{#if index === unreadIndex}
+				<div
+					class="my-1.5 flex items-center gap-2.5 text-[0.8em] text-accent"
+					bind:this={unreadLine}
+				>
+					<hr aria-hidden="true" class="flex-1 border-accent" />
+					<span class="font-bold">Unread messages</span>
+					<hr aria-hidden="true" class="flex-1 border-accent" />
 				</div>
 			{/if}
 			{#if isEvent(message)}

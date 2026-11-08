@@ -913,7 +913,7 @@ export const v1Groups: V1Group[] = [
 				method: 'GET',
 				path: '/api/v1/conversations/:username',
 				auth: 'signed in',
-				summary: 'peer, blocks and mute state'
+				summary: 'peer, blocks, mute state and `first_unread_id`'
 			},
 			{
 				method: 'GET / POST',
@@ -962,7 +962,7 @@ export const v1Groups: V1Group[] = [
 				method: 'GET / PATCH',
 				path: '/api/v1/groups/:id',
 				auth: 'member',
-				summary: 'name, owner, members / rename `{ name }`'
+				summary: 'name, owner, members, `first_unread_id` / rename `{ name }`'
 			},
 			{
 				method: 'GET / POST',

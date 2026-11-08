@@ -228,7 +228,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | ------------------ | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
 | `GET`              | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
 | `GET`              | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
-| `GET`              | `/api/v1/conversations/:username`                       | signed in             | peer, blocks and mute state                                                           |
+| `GET`              | `/api/v1/conversations/:username`                       | signed in             | peer, blocks, mute state and first unread message                                     |
 | `GET` / `POST`     | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
 | `PATCH` / `DELETE` | `/api/v1/conversations/:username/messages/:id`          | sender                | edit your message `{ content }` (within an hour) / delete it                          |
 | `PUT` / `DELETE`   | `/api/v1/conversations/:username/messages/:id/reaction` | signed in             | react `{ emoji }` / remove it                                                         |
@@ -236,7 +236,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | `PUT` / `DELETE`   | `/api/v1/conversations/:username/mute`                  | signed in             | mute / unmute                                                                         |
 | `POST`             | `/api/v1/conversations/:username/typing`                | signed in             | typing indicator                                                                      |
 | `GET` / `POST`     | `/api/v1/groups`                                        | signed in / not muted | your groups / create `{ name, members }`                                              |
-| `GET` / `PATCH`    | `/api/v1/groups/:id`                                    | member                | name, owner, members / rename `{ name }`                                              |
+| `GET` / `PATCH`    | `/api/v1/groups/:id`                                    | member                | name, owner, members, first unread message / rename `{ name }`                        |
 | `GET` / `POST`     | `/api/v1/groups/:id/messages`                           | member                | messages and events / send                                                            |
 | `PATCH` / `DELETE` | `/api/v1/groups/:id/messages/:messageId`                | sender                | edit your message `{ content }` (within an hour) / delete it                          |
 | `PUT` / `DELETE`   | `/api/v1/groups/:id/messages/:messageId/reaction`       | member                | react / remove it                                                                     |
