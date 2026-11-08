@@ -1491,7 +1491,9 @@
 							{/if}
 							{#if message.images?.length}
 								<!-- sized against the viewport, not the bubble: the bubble fits its content, and
-								     firefox shrinks an image sized in % of such a box to nearly nothing -->
+								     firefox shrinks an image sized in % of such a box to nearly nothing. the
+								     button is a block, not flex: firefox ignores an image flex item's max-height
+								     when measuring its width, which collapses the bubble to a sliver -->
 								<div
 									class="grid max-w-full gap-1.5 {message.images.length > 1
 										? 'w-[min(320px,60vw)] grid-cols-2'
@@ -1500,14 +1502,14 @@
 									{#each message.images as image, i}
 										<button
 											type="button"
-											class="flex cursor-zoom-in justify-center overflow-hidden rounded-[5px] bg-black/20 outline-none"
+											class="block cursor-zoom-in overflow-hidden rounded-[5px] bg-black/20 outline-none"
 											aria-label="Open image"
 											onclick={() => openImage(message.images ?? [], i)}
 										>
 											<img
-												class={message.images.length > 1
+												class="block {message.images.length > 1
 													? 'aspect-square w-full object-cover'
-													: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}
+													: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}"
 												src={image}
 												alt=""
 												loading="lazy"
