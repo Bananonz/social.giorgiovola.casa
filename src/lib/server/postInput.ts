@@ -1,5 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import crypto from 'node:crypto';
 import type { User } from '#lib/types.js';
 import { extractHashtags } from '#lib/hashtags.js';
 import { db, polls, post_hashtags, posts, users } from './db/index.js';
@@ -12,7 +13,9 @@ import {
 	removeUploads,
 	saveUpload,
 	sniffImage,
-	toWebp
+	sniffMedia,
+	toWebp,
+	uploadToS3
 } from './images.js';
 import { actionsLimited, canDeletePostOf } from './moderation.js';
 import { checkStaged, claimStaged, parseStagedIds } from './stagedUploads.js';
@@ -46,7 +49,10 @@ export async function readPostBody(request: Request, locals: App.Locals): Promis
 					? { options: form.getAll('poll_options'), minutes: form.get('poll_minutes') }
 					: null
 			},
-			files: form.getAll('images').filter((f): f is File => f instanceof File && f.size > 0)
+			// accept both 'images' (legacy) and 'files' field names
+			files: [...form.getAll('images'), ...form.getAll('files')].filter(
+				(f): f is File => f instanceof File && f.size > 0
+			)
 		};
 	}
 	return { body: await readJson(request), files: [] };
@@ -78,16 +84,27 @@ export async function submitPost(
 	if ('error' in poll) fail(400, poll.error);
 	if (poll.poll && !content) fail(400, 'A poll needs a question');
 	if (files.length + staged.length > LIMITS.postImages)
-		fail(400, `Posts can have at most ${LIMITS.postImages} images`);
+		fail(400, `Posts can have at most ${LIMITS.postImages} attachments`);
 
 	// validate everything before anything is written to disk
-	const uploads: { buffer: Buffer; ext: string }[] = [];
+	const imageUploads: { buffer: Buffer; ext: string }[] = [];
+	const mediaUploads: { buffer: Buffer; ext: string }[] = [];
 	for (const file of files) {
-		if (file.size > LIMITS.imageBytes) fail(400, 'Image too big, max size is 10mb');
 		const buffer = Buffer.from(await file.arrayBuffer());
-		const ext = sniffImage(buffer);
-		if (!ext) fail(400, 'Unsupported image type, use PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG');
-		uploads.push({ buffer, ext });
+		const imgExt = sniffImage(buffer);
+		if (imgExt) {
+			if (file.size > LIMITS.imageBytes) fail(400, 'Image too big, max size is 10mb');
+			imageUploads.push({ buffer, ext: imgExt });
+			continue;
+		}
+		const mediaExt = sniffMedia(buffer);
+		if (mediaExt) {
+			if (file.size > LIMITS.mediaBytes)
+				fail(400, `File too big, max size is ${Math.round(LIMITS.mediaBytes / 1024 / 1024)}mb`);
+			mediaUploads.push({ buffer, ext: mediaExt });
+			continue;
+		}
+		fail(400, 'Unsupported file type');
 	}
 
 	const reply_to = body.reply_to != null ? parseId(body.reply_to) : null;
@@ -102,19 +119,30 @@ export async function submitPost(
 	let optimized: Buffer[];
 	try {
 		optimized = await Promise.all(
-			uploads.map((u) => toWebp(u.buffer, u.ext, { size: POST_IMAGE_SIZE }))
+			imageUploads.map((u) => toWebp(u.buffer, u.ext, { size: POST_IMAGE_SIZE }))
 		);
 	} catch (e) {
 		if (e instanceof ImageError) fail(400, e.message);
 		throw e;
 	}
 	const saved = await Promise.all(optimized.map(saveUpload));
+	// upload video/audio to S3
+	const s3Urls: string[] = [];
+	try {
+		for (const u of mediaUploads) {
+			const url = await uploadToS3(u.buffer, `${crypto.randomUUID()}.${u.ext}`);
+			s3Urls.push(url);
+		}
+	} catch (e) {
+		await removeUploads(saved);
+		throw e;
+	}
 	const claimed = await claimStaged(user.id, staged);
 	if (claimed instanceof Response) {
 		await removeUploads(saved);
 		throw claimed;
 	}
-	const images = [...saved, ...claimed];
+	const images = [...saved, ...s3Urls, ...claimed];
 
 	try {
 		return await createPost(user, { content, images, reply_to, quote_of, poll: poll.poll });

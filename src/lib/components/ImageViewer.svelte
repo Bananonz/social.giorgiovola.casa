@@ -2,6 +2,7 @@
 	import { flushSync } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
 	import { viewer, closeImage } from '#lib/imageViewer.svelte.js';
+	import { isVideo } from '#lib/media.js';
 
 	const MIN_SCALE = 1;
 	const MAX_SCALE = 6;
@@ -10,6 +11,7 @@
 	const open = $derived(viewer.images.length > 0);
 	const multiple = $derived(viewer.images.length > 1);
 	const src = $derived(viewer.images[viewer.index]);
+	const currentIsVideo = $derived(isVideo(src ?? ''));
 
 	let stage: HTMLDivElement | undefined = $state();
 	let img: HTMLImageElement | undefined = $state();
@@ -308,22 +310,33 @@
 					</div>
 				{/each}
 			{/if}
-			<img
-				bind:this={img}
-				class="max-h-full max-w-full object-contain will-change-transform {interacting
-					? ''
-					: 'transition-transform duration-200 ease-out'} {zoomed
-					? interacting
-						? 'cursor-grabbing'
-						: 'cursor-grab'
-					: 'cursor-zoom-in'}"
-				style:transform="translate({tx + sx}px, {ty + sy}px) scale({scale})"
-				{src}
-				alt=""
-				referrerpolicy="no-referrer"
-				draggable="false"
-				ondblclick={(e) => toggleZoom(e.clientX, e.clientY)}
-			/>
+			{#if currentIsVideo}
+				<video
+					class="max-h-full max-w-full object-contain"
+					style:transform="translate({tx + sx}px, {ty + sy}px)"
+					{src}
+					controls
+					autoplay
+					playsinline
+				></video>
+			{:else}
+				<img
+					bind:this={img}
+					class="max-h-full max-w-full object-contain will-change-transform {interacting
+						? ''
+						: 'transition-transform duration-200 ease-out'} {zoomed
+						? interacting
+							? 'cursor-grabbing'
+							: 'cursor-grab'
+						: 'cursor-zoom-in'}"
+					style:transform="translate({tx + sx}px, {ty + sy}px) scale({scale})"
+					{src}
+					alt=""
+					referrerpolicy="no-referrer"
+					draggable="false"
+					ondblclick={(e) => toggleZoom(e.clientX, e.clientY)}
+				/>
+			{/if}
 		</div>
 
 		<div class="absolute top-4 right-4 flex gap-2.5">

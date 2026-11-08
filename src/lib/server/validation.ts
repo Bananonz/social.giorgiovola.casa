@@ -15,6 +15,8 @@ export const LIMITS = {
 	/** members of a group chat, its creator included */
 	groupMembers: 32,
 	imageBytes: 10 * 1024 * 1024,
+	/** max size for video/audio uploaded to S3 */
+	mediaBytes: 599 * 1024 * 1024,
 	pollOptionsMin: 2,
 	pollOptionsMax: 4,
 	pollOption: 80,

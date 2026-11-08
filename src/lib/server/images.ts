@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { db } from './db/index.js';
+import { S3_UPLOAD_URL, S3_BEARER_TOKEN } from '$app/env/private';
 
 export const UPLOAD_DIR = 'static/uploads';
 
@@ -21,6 +22,17 @@ export const IMAGE_TYPES: Record<string, string> = {
 	bmp: 'image/bmp',
 	ico: 'image/x-icon',
 	svg: 'image/svg+xml'
+};
+
+/** video and audio types accepted for S3 upload */
+export const MEDIA_TYPES: Record<string, string> = {
+	mp4: 'video/mp4',
+	webm: 'video/webm',
+	mov: 'video/quicktime',
+	mp3: 'audio/mpeg',
+	ogg: 'audio/ogg',
+	wav: 'audio/wav',
+	m4a: 'audio/mp4'
 };
 
 const ascii = (buf: Buffer, start: number, end: number) =>
@@ -73,12 +85,65 @@ export function sniffImage(buf: Buffer): string | null {
 	return null;
 }
 
+/**
+ * Detects video or audio type from magic bytes. Returns the extension (key of MEDIA_TYPES),
+ * or null when the buffer isn't a recognised media file.
+ */
+export function sniffMedia(buf: Buffer): string | null {
+	// mp4 / m4a / mov: ISO base media (ftyp box at offset 4)
+	if (buf.length >= 12 && ascii(buf, 4, 8) === 'ftyp') {
+		const brand = ascii(buf, 8, 12);
+		// avif is handled by sniffImage; here we catch video/audio ftyp brands
+		if (brand === 'avif' || brand === 'avis') return null;
+		// qt = mov, M4A = m4a, mp4/isom/... = mp4
+		if (brand === 'qt  ') return 'mov';
+		if (brand === 'M4A ') return 'm4a';
+		return 'mp4';
+	}
+	// webm: starts with EBML header (0x1A45DFA3)
+	if (buf.length >= 4 && buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3)
+		return 'webm';
+	// ogg: OggS magic
+	if (buf.length >= 4 && ascii(buf, 0, 4) === 'OggS') return 'ogg';
+	// wav: RIFF....WAVE
+	if (buf.length >= 12 && ascii(buf, 0, 4) === 'RIFF' && ascii(buf, 8, 12) === 'WAVE')
+		return 'wav';
+	// mp3: ID3 tag or sync word
+	if (buf.length >= 3 && ascii(buf, 0, 3) === 'ID3') return 'mp3';
+	if (buf.length >= 2 && buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return 'mp3';
+	return null;
+}
+
+/**
+ * Uploads a file to the S3 storage service. Returns the public URL, or throws on failure.
+ */
+export async function uploadToS3(buf: Buffer, filename: string): Promise<string> {
+	const url = S3_UPLOAD_URL;
+	const token = S3_BEARER_TOKEN;
+	if (!url || !token) throw new Error('S3 storage is not configured (S3_UPLOAD_URL / S3_BEARER_TOKEN)');
+
+	const form = new FormData();
+	form.set('file', new File([new Uint8Array(buf)], filename));
+
+	const res = await fetch(url, {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${token}` },
+		body: form
+	});
+	if (!res.ok) {
+		const text = await res.text().catch(() => '');
+		throw new Error(`S3 upload failed (${res.status}): ${text}`);
+	}
+	const json = (await res.json()) as { url: string };
+	return json.url;
+}
+
 const FILE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.([a-z]+)$/;
 
 /** The content type for an upload file name as written by saveUpload, null for anything else. */
 export function uploadType(file: string): string | null {
 	const ext = FILE_RE.exec(file)?.[1];
-	return ext ? IMAGE_TYPES[ext] ?? null : null;
+	return ext ? IMAGE_TYPES[ext] ?? MEDIA_TYPES[ext] ?? null : null;
 }
 
 // decoding a huge (or decompression-bomb) image would eat the server's memory

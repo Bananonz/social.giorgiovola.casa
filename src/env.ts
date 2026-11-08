@@ -10,6 +10,8 @@ export const variables = defineEnvVars({
 	SIGNUP_PASSWORD: { schema: optional },
 	DISCORD_WEBHOOK_URL: { schema: optional },
 	ADDRESS_HEADER: { schema: optional },
+	S3_UPLOAD_URL: { schema: optional },
+	S3_BEARER_TOKEN: { schema: optional },
 	DATABASE_URL: {
 		// server modules are imported during `vite build`, when no database is configured
 		schema: (input: string | undefined) => {

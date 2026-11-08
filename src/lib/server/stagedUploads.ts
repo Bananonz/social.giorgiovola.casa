@@ -7,7 +7,9 @@ import {
 	UPLOAD_DIR,
 	removeUploads,
 	sniffImage,
-	toWebp
+	sniffMedia,
+	toWebp,
+	uploadToS3
 } from './images.js';
 import { LIMITS } from './validation.js';
 
@@ -16,6 +18,9 @@ import { LIMITS } from './validation.js';
  * place. They're processed like any upload but kept out of the served directory and owned by
  * their uploader until a post or message claims them; unclaimed ones are deleted after a while.
  * Kept in memory: the app runs as a single process (like the rate limits).
+ *
+ * Video and audio files are uploaded to S3 immediately and their URL is stored as the staged
+ * path; claiming just returns the URL as-is (the file is already permanent on S3).
  */
 
 // inside UPLOAD_DIR so claiming is a rename on the same filesystem. The uploads route only serves
@@ -23,7 +28,7 @@ import { LIMITS } from './validation.js';
 const STAGING_DIR = path.join(UPLOAD_DIR, 'staged');
 const TTL_MS = 24 * 60 * 60 * 1000;
 
-type Staged = { userId: number; expires: number };
+type Staged = { userId: number; expires: number; s3Url?: string };
 const staged = new Map<string, Staged>();
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -70,6 +75,56 @@ export async function stageImage(userId: number, file: File): Promise<string | R
 	return id;
 }
 
+/**
+ * Validates a video or audio file: uploads it to S3 right away and stores the resulting URL.
+ * Returns the staged id, or the error.
+ */
+export async function stageMedia(userId: number, file: File): Promise<string | Response> {
+	if (file.size > LIMITS.mediaBytes) {
+		const mb = Math.round(LIMITS.mediaBytes / 1024 / 1024);
+		return new Response(`File too big, max size is ${mb}mb`, { status: 400 });
+	}
+	const buffer = Buffer.from(await file.arrayBuffer());
+	const ext = sniffMedia(buffer);
+	if (!ext) {
+		return new Response(
+			'Unsupported media type, use MP4, WebM, MOV, MP3, OGG, WAV or M4A',
+			{ status: 400 }
+		);
+	}
+	const filename = `${crypto.randomUUID()}.${ext}`;
+	let s3Url: string;
+	try {
+		s3Url = await uploadToS3(buffer, filename);
+	} catch (e) {
+		console.error('S3 upload failed', e);
+		return new Response('Could not upload the file, try again', { status: 502 });
+	}
+	const id = crypto.randomUUID();
+	staged.set(id, { userId, expires: Date.now() + TTL_MS, s3Url });
+	return id;
+}
+
+/**
+ * Stages an image or a video/audio file. Detects the type from magic bytes and routes
+ * accordingly: images are processed locally, media files go to S3.
+ */
+export async function stageUpload(userId: number, file: File): Promise<string | Response> {
+	const buffer = Buffer.from(await file.arrayBuffer());
+	// try image first (cheaper to process locally)
+	if (sniffImage(buffer)) {
+		return stageImage(userId, new File([buffer], file.name, { type: file.type }));
+	}
+	// try video/audio
+	if (sniffMedia(buffer)) {
+		return stageMedia(userId, new File([buffer], file.name, { type: file.type }));
+	}
+	return new Response(
+		'Unsupported file type. Use PNG, JPEG, GIF, WebP, AVIF, MP4, WebM, MOV, MP3, OGG, WAV or M4A',
+		{ status: 400 }
+	);
+}
+
 /** Deletes one of `userId`'s staged images (removed from the composer). False when not found. */
 export async function discardStaged(userId: number, id: string): Promise<boolean> {
 	if (staged.get(id)?.userId !== userId) return false;
@@ -94,7 +149,7 @@ export function parseStagedIds(raw: unknown): string[] | Response {
 export function checkStaged(userId: number, ids: string[]): Response | null {
 	for (const id of ids) {
 		if (staged.get(id)?.userId !== userId) {
-			return new Response('An image expired, upload it again', { status: 410 });
+			return new Response('An upload expired, upload it again', { status: 410 });
 		}
 	}
 	return null;
@@ -102,23 +157,32 @@ export function checkStaged(userId: number, ids: string[]): Response | null {
 
 /**
  * Moves staged images in with the other uploads, in order, and returns their URL paths (as
- * saveUpload does), or the 410 when one is gone. Delete them with removeUploads if the post or
+ * saveUpload does), or the 410 when one is gone. S3 media files are already permanent, so
+ * their URL is returned directly. Delete local ones with removeUploads if the post or
  * message they're for then fails.
  */
 export async function claimStaged(userId: number, ids: string[]): Promise<string[] | Response> {
 	const missing = checkStaged(userId, ids);
 	if (missing) return missing;
 	// taken off the map first, so two concurrent requests can't both claim one
+	const entries = ids.map((id) => ({ id, entry: staged.get(id)! }));
 	for (const id of ids) staged.delete(id);
 	const urls: string[] = [];
 	try {
-		for (const id of ids) {
-			const file = `${crypto.randomUUID()}.webp`;
-			await fs.promises.rename(fileOf(id), path.join(UPLOAD_DIR, file));
-			urls.push(`/uploads/${file}`);
+		for (const { id, entry } of entries) {
+			if (entry.s3Url) {
+				// video/audio already on S3
+				urls.push(entry.s3Url);
+			} else {
+				// image: move from staging to permanent
+				const file = `${crypto.randomUUID()}.webp`;
+				await fs.promises.rename(fileOf(id), path.join(UPLOAD_DIR, file));
+				urls.push(`/uploads/${file}`);
+			}
 		}
 	} catch (e) {
-		await removeUploads(urls);
+		// only remove local uploads on failure; S3 files are left (harmless orphans)
+		await removeUploads(urls.filter((u) => u.startsWith('/uploads/')));
 		await Promise.all(ids.map(drop));
 		throw e;
 	}

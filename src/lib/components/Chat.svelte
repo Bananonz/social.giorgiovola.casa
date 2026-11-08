@@ -4,6 +4,7 @@
 	import LoadingScreen from './LoadingScreen.svelte';
 	import UploadProgress from './UploadProgress.svelte';
 	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
+	import { MEDIA_ACCEPT, MAX_MEDIA_BYTES, MAX_IMAGE_BYTES, isVideo, isAudio } from '#lib/media.js';
 	import QuoteCard from './QuoteCard.svelte';
 	import { onRealtime } from '#lib/realtime.js';
 	import { isMobile, messagesCount, user } from '#lib/store.js';
@@ -119,8 +120,7 @@
 	let dragDepth = 0;
 
 	const MAX_IMAGES = 5;
-	const MAX_BYTES = 10 * 1024 * 1024;
-	const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+	const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|mp4|webm|mov|mp3|ogg|wav|m4a)$/i;
 
 	const threadUrl =
 		groupId !== null ? `/api/v1/groups/${groupId}` : `/api/v1/conversations/${peerUsername}`;
@@ -239,9 +239,9 @@
 		});
 	}
 
-	/** what a reply shows of a message: its text, or that it is a photo */
+	/** what a reply shows of a message: its text, or that it is a photo/video/audio */
 	const previewOf = (m: { content: string; images: number }) =>
-		m.content || (m.images > 0 ? '📷 Photo' : '');
+		m.content || (m.images > 0 ? '📎 Media' : '');
 	const replyNameOf = (sender: MessageReplyTo['sender']) =>
 		sender.username === $user?.username ? 'You' : sender.name;
 	const authorNameOf = (m: Message) =>
@@ -865,23 +865,36 @@
 		errorTimeout = setTimeout(() => (error = null), 4000);
 	}
 
-	function isImage(file: File) {
-		return file.type.startsWith('image/') || (!file.type && IMAGE_EXT_RE.test(file.name));
+	function isMediaFile(file: File) {
+		return (
+			file.type.startsWith('image/') ||
+			file.type.startsWith('video/') ||
+			file.type.startsWith('audio/') ||
+			(!file.type && MEDIA_EXT_RE.test(file.name))
+		);
 	}
 
 	function addFiles(files: Iterable<File>) {
 		const added: Attachment[] = [];
 		for (const file of files) {
-			if (!isImage(file)) {
-				showError(`${file.name || 'That file'} is not an image.`);
+			if (!isMediaFile(file)) {
+				showError(`${file.name || 'That file'} is not a supported file.`);
 				continue;
 			}
-			if (file.size > MAX_BYTES) {
-				showError(`${file.name || 'Image'} is too big, max size is 10mb.`);
+			const maxBytes =
+				file.type.startsWith('video/') ||
+				file.type.startsWith('audio/') ||
+				isVideo(file.name) ||
+				isAudio(file.name)
+					? MAX_MEDIA_BYTES
+					: MAX_IMAGE_BYTES;
+			if (file.size > maxBytes) {
+				const mb = Math.round(maxBytes / 1024 / 1024);
+				showError(`${file.name || 'File'} is too big, max size is ${mb}mb.`);
 				continue;
 			}
 			if (attachments.length + added.length >= MAX_IMAGES) {
-				showError(`You can attach at most ${MAX_IMAGES} images.`);
+				showError(`You can attach at most ${MAX_IMAGES} files.`);
 				break;
 			}
 			// uploaded right away, so sending doesn't wait for it
@@ -889,7 +902,7 @@
 			attachment.done.catch((e) => {
 				// once it's part of a message, post reports it
 				if (!attachments.includes(attachment)) return;
-				showError(e instanceof UploadError ? e.message : 'Could not upload the image.');
+				showError(e instanceof UploadError ? e.message : 'Could not upload the file.');
 				removeAttachment(attachment);
 			});
 			added.push(attachment);
@@ -1550,36 +1563,50 @@
 									<span class="line-clamp-2 wrap-anywhere opacity-80">{previewOf(reply)}</span>
 								</button>
 							{/if}
-							{#if message.images?.length}
-								<!-- sized against the viewport, not the bubble: the bubble fits its content, and
-								     firefox shrinks an image sized in % of such a box to nearly nothing. the
-								     button is a block, not flex: firefox ignores an image flex item's max-height
-								     when measuring its width, which collapses the bubble to a sliver -->
-								<div
-									class="grid max-w-full gap-1.5 {message.images.length > 1
-										? 'w-[min(320px,60vw)] grid-cols-2'
-										: ''}"
-								>
-									{#each message.images as image, i}
-										<button
-											type="button"
-											class="block cursor-zoom-in overflow-hidden rounded-[5px] bg-black/20 outline-none"
-											aria-label="Open image"
-											onclick={() => openImage(message.images ?? [], i)}
-										>
-											<img
-												class="block {message.images.length > 1
-													? 'aspect-square w-full object-cover'
-													: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}"
-												src={image}
-												alt=""
-												loading="lazy"
-												draggable="false"
-											/>
-										</button>
-									{/each}
-								</div>
-							{/if}
+					{#if message.images?.length}
+						<!-- sized against the viewport, not the bubble: the bubble fits its content, and
+						     firefox shrinks an image sized in % of such a box to nearly nothing. the
+						     button is a block, not flex: firefox ignores an image flex item's max-height
+						     when measuring its width, which collapses the bubble to a sliver -->
+						<div
+							class="grid max-w-full gap-1.5 {message.images.length > 1
+								? 'w-[min(320px,60vw)] grid-cols-2'
+								: ''}"
+						>
+							{#each message.images as media, i}
+								{#if isVideo(media)}
+									<video
+										class="block {message.images.length > 1
+											? 'aspect-square w-full object-cover'
+											: 'max-h-[360px] max-w-[min(320px,60vw)]'}"
+										src={media}
+										controls
+										preload="metadata"
+										playsinline
+									></video>
+								{:else if isAudio(media)}
+									<audio class="w-[min(280px,55vw)]" src={media} controls preload="metadata"></audio>
+								{:else}
+									<button
+										type="button"
+										class="block cursor-zoom-in overflow-hidden rounded-[5px] bg-black/20 outline-none"
+										aria-label="Open image"
+										onclick={() => openImage(message.images ?? [], i)}
+									>
+										<img
+											class="block {message.images.length > 1
+												? 'aspect-square w-full object-cover'
+												: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}"
+											src={media}
+											alt=""
+											loading="lazy"
+											draggable="false"
+										/>
+									</button>
+								{/if}
+							{/each}
+						</div>
+					{/if}
 							{#if message.content}
 								<p class="wrap-anywhere whitespace-pre-wrap">
 									{#each message.content.split(/(\s)/) as part}{#if isHttpLink(part)}<a
@@ -1826,7 +1853,13 @@
 		<div class="flex flex-wrap gap-2.5">
 			{#each attachments as attachment (attachment.url)}
 				<div class="relative size-16 overflow-hidden rounded-[5px] border border-line">
-					<img class="size-full object-cover" src={attachment.url} alt="" />
+					{#if attachment.video}
+						<video class="size-full object-cover" src={attachment.url} muted></video>
+					{:else if attachment.audio}
+						<div class="flex size-full items-center justify-center bg-black/40 text-[1.5em]">🎵</div>
+					{:else}
+						<img class="size-full object-cover" src={attachment.url} alt="" />
+					{/if}
 					{#if !attachment.id}
 						<div class="absolute inset-0 flex items-center justify-center bg-black/50">
 							<UploadProgress progress={attachment.progress} />
@@ -1917,14 +1950,14 @@
 				bind:this={fileInput}
 				onchange={onFilesSelected}
 				type="file"
-				accept="image/*"
+				accept={MEDIA_ACCEPT}
 				multiple
 				hidden
 			/>
 			<button
 				type="button"
-				title="Attach images"
-				aria-label="Attach images"
+				title="Attach files"
+				aria-label="Attach files"
 				disabled={attachments.length >= MAX_IMAGES || !!editing}
 				onclick={() => fileInput?.click()}
 				class="flex size-[46px] shrink-0 cursor-pointer items-center justify-center rounded-[10px] border border-line bg-black/70 outline-none backdrop-blur-[2px] hover:border-accent focus-visible:border-accent disabled:cursor-default disabled:opacity-40 disabled:hover:border-line"

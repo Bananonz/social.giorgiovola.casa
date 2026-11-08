@@ -1,17 +1,23 @@
+import { isVideo, isAudio } from '#lib/media.js';
+
 /** A failed upload, with the message to show. */
 export class UploadError extends Error {}
 
 /**
- * An image picked in the post composer or the chat input. It's uploaded (and compressed on the
- * server) right away, so sending only has to pass its id as `uploads`.
+ * A file picked in the post composer or the chat input. It's uploaded (and compressed/forwarded
+ * on the server) right away, so sending only has to pass its id as `uploads`.
  */
 export class Attachment {
 	readonly file: File;
 	/** local preview, shown until the sent post or message comes back */
 	readonly url: string;
-	/** share of the file sent so far, 0 to 1; the server is still compressing it at 1 */
+	/** whether this is a video file */
+	readonly video: boolean;
+	/** whether this is an audio file */
+	readonly audio: boolean;
+	/** share of the file sent so far, 0 to 1; the server is still processing it at 1 */
 	progress = $state(0);
-	/** set once the server holds the compressed image */
+	/** set once the server holds the processed file */
 	id: string | null = $state(null);
 	/** set when the upload failed */
 	failed = $state(false);
@@ -22,6 +28,8 @@ export class Attachment {
 	constructor(file: File) {
 		this.file = file;
 		this.url = URL.createObjectURL(file);
+		this.video = file.type.startsWith('video/') || isVideo(file.name);
+		this.audio = file.type.startsWith('audio/') || isAudio(file.name);
 		this.upload();
 	}
 
@@ -55,18 +63,18 @@ export class Attachment {
 						[400, 403, 429].includes(xhr.status)
 							? errorText(xhr.responseText)
 							: xhr.status === 413
-							? 'Image is too big.'
-							: 'Could not upload the image.'
+								? 'File is too big.'
+								: 'Could not upload the file.'
 					)
 				);
 			};
 			xhr.onerror = () => {
 				this.#xhr = null;
-				reject(new UploadError('Could not upload the image, check your connection.'));
+				reject(new UploadError('Could not upload the file, check your connection.'));
 			};
 			xhr.onabort = () => reject(new UploadError('Upload cancelled.'));
 			const body = new FormData();
-			body.set('image', this.file);
+			body.set('file', this.file);
 			xhr.send(body);
 		});
 		this.done = done;
@@ -116,8 +124,8 @@ export async function uploadIds(attachments: Attachment[], fresh = false): Promi
 /** The message of an API error body (`{ "error": "…" }`). */
 function errorText(body: string) {
 	try {
-		return (JSON.parse(body) as { error?: string }).error || 'Could not upload the image.';
+		return (JSON.parse(body) as { error?: string }).error || 'Could not upload the file.';
 	} catch {
-		return body || 'Could not upload the image.';
+		return body || 'Could not upload the file.';
 	}
 }

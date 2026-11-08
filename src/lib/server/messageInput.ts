@@ -1,10 +1,13 @@
+import crypto from 'node:crypto';
 import {
 	ImageError,
 	POST_IMAGE_SIZE,
 	removeUploads,
 	saveUpload,
 	sniffImage,
-	toWebp
+	sniffMedia,
+	toWebp,
+	uploadToS3
 } from './images.js';
 import { readJson } from './api.js';
 import { checkStaged, claimStaged, parseStagedIds } from './stagedUploads.js';
@@ -14,7 +17,7 @@ import { LIMITS, parseId } from './validation.js';
 /** Shared by direct and group messages: reading the body, validating it and saving its images. */
 
 // Sending is limited per sender over direct and group messages together, and messages carrying
-// images (the expensive ones to process and store) have a tighter limit of their own.
+// media (the expensive ones to process and store) have a tighter limit of their own.
 const WINDOW_MS = 60_000;
 const MAX_MESSAGES = 70;
 const MAX_IMAGE_MESSAGES = 5;
@@ -44,11 +47,11 @@ export type MessageBody = {
 	fields: Record<string, unknown>;
 	content: string;
 	files: File[];
-	/** ids of images uploaded beforehand (api/uploads), attached after `files` */
+	/** ids of files uploaded beforehand (api/uploads), attached after `files` */
 	uploads: string[];
 };
 
-/** Multipart when the message has images, plain JSON otherwise. */
+/** Multipart when the message has files, plain JSON otherwise. */
 export async function readMessageBody(request: Request): Promise<MessageBody | Response> {
 	if (request.headers.get('content-type')?.startsWith('multipart/form-data')) {
 		let form: FormData;
@@ -63,7 +66,10 @@ export async function readMessageBody(request: Request): Promise<MessageBody | R
 		return {
 			fields: Object.fromEntries([...form.entries()].filter(([, v]) => typeof v === 'string')),
 			content: typeof raw === 'string' ? raw.trim() : '',
-			files: form.getAll('images').filter((f): f is File => f instanceof File && f.size > 0),
+			// accept both 'images' (legacy) and 'files' field names
+			files: [...form.getAll('images'), ...form.getAll('files')].filter(
+				(f): f is File => f instanceof File && f.size > 0
+			),
 			uploads
 		};
 	}
@@ -88,7 +94,7 @@ export function readReplyTo(fields: Record<string, unknown>): number | null | Re
 	return parseId(raw) ?? new Response('Invalid reply_to', { status: 400 });
 }
 
-/** Whether the message carries images, uploaded with it or beforehand. */
+/** Whether the message carries files, uploaded with it or beforehand. */
 export const hasImages = (body: MessageBody) => body.files.length + body.uploads.length > 0;
 
 /** The error to send back for a message that can't be sent as is, or null. */
@@ -101,7 +107,7 @@ export function checkMessage(body: MessageBody, userId: number): Response | null
 		});
 	}
 	if (files.length + uploads.length > LIMITS.messageImages) {
-		return new Response(`Messages can have at most ${LIMITS.messageImages} images`, {
+		return new Response(`Messages can have at most ${LIMITS.messageImages} attachments`, {
 			status: 400
 		});
 	}
@@ -109,43 +115,63 @@ export function checkMessage(body: MessageBody, userId: number): Response | null
 }
 
 /**
- * Validates every image before anything is written to disk, then saves them as WebP and claims
- * the ones uploaded beforehand. Returns their URL paths, or the error to send back.
+ * Validates every file before anything is written to disk, then saves images as WebP, uploads
+ * video/audio to S3, and claims the ones uploaded beforehand. Returns their URL paths, or the
+ * error to send back.
  */
 export async function saveMessageImages(
 	{ files, uploads: staged }: MessageBody,
 	userId: number
 ): Promise<string[] | Response> {
-	const uploads: { buffer: Buffer; ext: string }[] = [];
+	const imageUploads: { buffer: Buffer; ext: string }[] = [];
+	const mediaUploads: { buffer: Buffer; ext: string }[] = [];
 	for (const file of files) {
-		if (file.size > LIMITS.imageBytes) {
-			return new Response('Image too big, max size is 10mb', { status: 400 });
-		}
 		const buffer = Buffer.from(await file.arrayBuffer());
-		const ext = sniffImage(buffer);
-		if (!ext) {
-			return new Response(
-				'Unsupported image type, use PNG, JPEG, GIF, WebP, AVIF, BMP, ICO or SVG',
-				{ status: 400 }
-			);
+		const imgExt = sniffImage(buffer);
+		if (imgExt) {
+			if (file.size > LIMITS.imageBytes) {
+				return new Response('Image too big, max size is 10mb', { status: 400 });
+			}
+			imageUploads.push({ buffer, ext: imgExt });
+			continue;
 		}
-		uploads.push({ buffer, ext });
+		const mediaExt = sniffMedia(buffer);
+		if (mediaExt) {
+			if (file.size > LIMITS.mediaBytes) {
+				const mb = Math.round(LIMITS.mediaBytes / 1024 / 1024);
+				return new Response(`File too big, max size is ${mb}mb`, { status: 400 });
+			}
+			mediaUploads.push({ buffer, ext: mediaExt });
+			continue;
+		}
+		return new Response('Unsupported file type', { status: 400 });
 	}
 
 	let optimized: Buffer[];
 	try {
 		optimized = await Promise.all(
-			uploads.map((u) => toWebp(u.buffer, u.ext, { size: POST_IMAGE_SIZE }))
+			imageUploads.map((u) => toWebp(u.buffer, u.ext, { size: POST_IMAGE_SIZE }))
 		);
 	} catch (e) {
 		if (e instanceof ImageError) return new Response(e.message, { status: 400 });
 		throw e;
 	}
 	const saved = await Promise.all(optimized.map(saveUpload));
+	// upload video/audio to S3
+	const s3Urls: string[] = [];
+	try {
+		for (const u of mediaUploads) {
+			const url = await uploadToS3(u.buffer, `${crypto.randomUUID()}.${u.ext}`);
+			s3Urls.push(url);
+		}
+	} catch (e) {
+		await removeUploads(saved);
+		throw e;
+	}
 	const claimed = await claimStaged(userId, staged);
 	if (claimed instanceof Response) {
 		await removeUploads(saved);
 		return claimed;
 	}
-	return [...saved, ...claimed];
+	return [...saved, ...s3Urls, ...claimed];
 }

@@ -9,6 +9,7 @@
 	import LoadingScreen from './LoadingScreen.svelte';
 	import UploadProgress from './UploadProgress.svelte';
 	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
+	import { MEDIA_ACCEPT, MAX_MEDIA_BYTES, MAX_IMAGE_BYTES, isVideo, isAudio } from '#lib/media.js';
 	import { user } from '#lib/store.js';
 	import { onProfileSwitch, takeDraft, type ComposerDraft } from '#lib/composerDraft.js';
 	import { page } from '$app/state';
@@ -28,8 +29,7 @@
 	const placeholder = $derived(placeholderProp ?? page.data.motd ?? '');
 
 	const MAX_IMAGES = 5;
-	const MAX_BYTES = 10 * 1024 * 1024;
-	const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i;
+	const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg|mp4|webm|mov|mp3|ogg|wav|m4a)$/i;
 
 	const MAX_POLL_OPTIONS = 4;
 	const MAX_POLL_OPTION = 80;
@@ -84,23 +84,36 @@
 		if (pollOptions) pollOptions = pollOptions.filter((_, i) => i !== index);
 	}
 
-	function isImage(file: File) {
-		return file.type.startsWith('image/') || (!file.type && IMAGE_EXT_RE.test(file.name));
+	function isMediaFile(file: File) {
+		return (
+			file.type.startsWith('image/') ||
+			file.type.startsWith('video/') ||
+			file.type.startsWith('audio/') ||
+			(!file.type && MEDIA_EXT_RE.test(file.name))
+		);
 	}
 
 	function addFiles(files: Iterable<File>) {
 		const added: Attachment[] = [];
 		for (const file of files) {
-			if (!isImage(file)) {
-				showError(`${file.name || 'That file'} is not an image.`);
+			if (!isMediaFile(file)) {
+				showError(`${file.name || 'That file'} is not a supported file.`);
 				continue;
 			}
-			if (file.size > MAX_BYTES) {
-				showError(`${file.name || 'Image'} is too big, max size is 10mb.`);
+			const maxBytes =
+				file.type.startsWith('video/') ||
+				file.type.startsWith('audio/') ||
+				isVideo(file.name) ||
+				isAudio(file.name)
+					? MAX_MEDIA_BYTES
+					: MAX_IMAGE_BYTES;
+			if (file.size > maxBytes) {
+				const mb = Math.round(maxBytes / 1024 / 1024);
+				showError(`${file.name || 'File'} is too big, max size is ${mb}mb.`);
 				continue;
 			}
 			if (attachments.length + added.length >= MAX_IMAGES) {
-				showError(`You can attach at most ${MAX_IMAGES} images.`);
+				showError(`You can attach at most ${MAX_IMAGES} files.`);
 				break;
 			}
 			// uploaded right away, so posting doesn't wait for it
@@ -108,7 +121,7 @@
 			attachment.done.catch((e) => {
 				// once it's part of a post, submit reports it
 				if (!attachments.includes(attachment)) return;
-				showError(e instanceof UploadError ? e.message : 'Could not upload the image.');
+				showError(e instanceof UploadError ? e.message : 'Could not upload the file.');
 				removeAttachment(attachment);
 			});
 			added.push(attachment);
@@ -262,7 +275,7 @@
 			) {
 				showError((await errorOf(res)).message);
 			} else if (res.status === 413) {
-				showError('Images are too big.');
+				showError('Files are too big.');
 			} else {
 				showError('Something went wrong.');
 			}
@@ -290,7 +303,7 @@
 		<div
 			class="w-full max-w-[442px] rounded-md border-2 border-dashed border-accent p-10 text-center"
 		>
-			Drop images to attach
+			Drop files to attach
 		</div>
 	</div>
 {/if}
@@ -321,14 +334,14 @@
 			bind:this={fileInput}
 			onchange={onFilesSelected}
 			type="file"
-			accept="image/*"
+			accept={MEDIA_ACCEPT}
 			multiple
 			hidden
 		/>
 		<button
 			type="button"
-			title="Attach images"
-			aria-label="Attach images"
+			title="Attach files"
+			aria-label="Attach files"
 			disabled={attachments.length >= MAX_IMAGES}
 			onclick={() => fileInput?.click()}
 			class="flex cursor-pointer items-end border-b border-foreground p-2.5 outline-none disabled:cursor-default disabled:opacity-40"
@@ -380,7 +393,13 @@
 		<div class="flex flex-wrap gap-2.5">
 			{#each attachments as attachment (attachment.url)}
 				<div class="relative size-20 overflow-hidden rounded-[5px] border border-line">
-					<img class="size-full object-cover" src={attachment.url} alt="" />
+					{#if attachment.video}
+						<video class="size-full object-cover" src={attachment.url} muted></video>
+					{:else if attachment.audio}
+						<div class="flex size-full items-center justify-center bg-black/40 text-[1.5em]">🎵</div>
+					{:else}
+						<img class="size-full object-cover" src={attachment.url} alt="" />
+					{/if}
 					{#if !attachment.id}
 						<div class="absolute inset-0 flex items-center justify-center bg-black/50">
 							<UploadProgress progress={attachment.progress} />
@@ -474,7 +493,13 @@
 				<div class="flex flex-wrap gap-2.5">
 					{#each draft.attachments as attachment (attachment.url)}
 						<div class="relative size-20 overflow-hidden rounded-[5px] border border-line">
-							<img class="size-full object-cover" src={attachment.url} alt="" />
+							{#if attachment.video}
+								<video class="size-full object-cover" src={attachment.url} muted></video>
+							{:else if attachment.audio}
+								<div class="flex size-full items-center justify-center bg-black/40 text-[1.5em]">🎵</div>
+							{:else}
+								<img class="size-full object-cover" src={attachment.url} alt="" />
+							{/if}
 							{#if !attachment.id}
 								<div class="absolute inset-0 flex items-center justify-center bg-black/50">
 									<UploadProgress progress={attachment.progress} />

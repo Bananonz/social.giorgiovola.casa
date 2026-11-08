@@ -15,6 +15,7 @@
 	import { onRealtime } from '#lib/realtime.js';
 	import { markMentionSeen, mentions, splitMentions } from '#lib/mentions.js';
 	import { isHttpLink, isRatio, ratioPercent } from '#lib/utils.js';
+	import { isVideo, isAudio } from '#lib/media.js';
 	import { hashtagHref, parseHashtag } from '#lib/hashtags.js';
 	import { openImage } from '#lib/imageViewer.svelte.js';
 	import { profileHover } from '#lib/profileCard.svelte.js';
@@ -791,28 +792,42 @@
 					{/if}
 					{#if gallery.length > 0}
 						<div class="grid gap-1.5 {gallery.length > 1 ? 'grid-cols-2' : ''}">
-							{#each gallery as image, i}
-								<button
-									type="button"
-									class="flex cursor-zoom-in justify-center overflow-hidden rounded-[5px] bg-black/40 outline-none"
-									aria-label="Open image"
-									onclick={(e) => {
-										e.stopPropagation();
-										// photos are where a double tap is most expected
-										if (canDoubleTap()) tap(e, () => openImage(gallery, i));
-										else openImage(gallery, i);
-									}}
-								>
-									<img
+							{#each gallery as media, i}
+								{#if isVideo(media)}
+									<video
 										class={gallery.length > 1
-											? 'aspect-square w-full object-cover'
-											: 'max-h-[500px] max-w-full object-contain'}
-										src={image}
-										alt=""
-										referrerpolicy="no-referrer"
-										loading="lazy"
-									/>
-								</button>
+											? 'aspect-square w-full object-cover rounded-[5px]'
+											: 'max-h-[500px] max-w-full rounded-[5px]'}
+										src={media}
+										controls
+										preload="metadata"
+										playsinline
+									></video>
+								{:else if isAudio(media)}
+									<audio class="w-full" src={media} controls preload="metadata"></audio>
+								{:else}
+									<button
+										type="button"
+										class="flex cursor-zoom-in justify-center overflow-hidden rounded-[5px] bg-black/40 outline-none"
+										aria-label="Open image"
+										onclick={(e) => {
+											e.stopPropagation();
+											// photos are where a double tap is most expected
+											if (canDoubleTap()) tap(e, () => openImage(gallery, i));
+											else openImage(gallery, i);
+										}}
+									>
+										<img
+											class={gallery.length > 1
+												? 'aspect-square w-full object-cover'
+												: 'max-h-[500px] max-w-full object-contain'}
+											src={media}
+											alt=""
+											referrerpolicy="no-referrer"
+											loading="lazy"
+										/>
+									</button>
+								{/if}
 							{/each}
 						</div>
 					{/if}

@@ -44,6 +44,9 @@ export default defineConfig(({ mode }) => ({
 					// `*` doesn't cover blob:, which the composer needs for previews of attached files
 					// @ts-expect-error `*` missing from the Source type
 					'img-src': ['*', 'blob:'],
+					// video and audio are hosted on S3; blob: is for local previews in the composer
+					// @ts-expect-error `*` missing from the Source type
+					'media-src': ['*', 'blob:'],
 					'base-uri': ['self'],
 					'frame-ancestors': ['none'],
 					'object-src': ['none'],
@@ -55,6 +58,7 @@ export default defineConfig(({ mode }) => ({
 		})
 	],
 	server: {
+		host: '0.0.0.0',
 		// the app writes user uploads and avatars into static/ at runtime (served by their own
 		// routes): without this every upload makes the dev server reload the page
 		watch: { ignored: ['**/static/uploads/**', '**/static/avatars/**'] }
