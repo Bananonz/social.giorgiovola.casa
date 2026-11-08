@@ -188,6 +188,7 @@ Me (GET /me):
 Message (direct message):
   { "id", "sender": "alice", "recipient": "bob",   // usernames
     "content", "images": ["/uploads/…"], "created_at",
+    "edited_at": null | when the sender last changed the text,
     "reply_to": { "id", "sender": { "username", "name" }, "content" (cut to 200),
                   "images": 2 } | null,
     "reactions": [ { "emoji", "username", "name", "avatar" } ],
@@ -196,7 +197,7 @@ Message (direct message):
 GroupMessage (message or event of a group chat):
   { "id", "group_id", "kind": "message" | "created" | "added" | "removed" | "left" |
     "renamed" | "owner", "sender": User, "target": User | null, "content", "images",
-    "created_at", "reply_to", "reactions", "linked_post" }
+    "created_at", "edited_at", "reply_to", "reactions", "linked_post" }
   Anything but "message" is an event line ("Alice added Bob"): never unread, can't be
   replied or reacted to. "target" is who was added or removed; for "created" and
   "renamed" the content is the group's name.
@@ -445,6 +446,12 @@ POST /conversations/:username/messages   signed in, not muted
   { "content" (max ${LIMITS.messageContent}), "uploads": [ids] (max ${LIMITS.messageImages}), "reply_to": message id | null }
   201: <Message>. 403 when either side blocked the other. 20 messages a minute in all
   (direct and group), 5 a minute with images.
+PATCH /conversations/:username/messages/:id   your own message, not muted
+  { "content" (max ${LIMITS.messageContent}) } → <Message> with the new text and "edited_at" set.
+  Only the text changes (images and reply_to stay); "" is accepted only when the message has
+  images. Allowed for 60 minutes after sending: later → 403. 404 when it isn't yours or isn't in
+  the conversation with :username; 403 when either side blocked the other. Sending the same
+  text changes nothing. 30 edits a minute (direct and group). Both sides get message_edited.
 DELETE /conversations/:username/messages/:id   your own message → 204 (for both sides); 404 when it
   isn't yours or isn't in the conversation with :username
 PUT /conversations/:username/messages/:id/reaction   { "emoji": "👍" } → { "reactions" }
@@ -465,6 +472,9 @@ GET /groups/:id                       member → <Group>; 404 when you aren't a 
 PATCH /groups/:id   { "name" }        member, not muted → <Group>
 GET /groups/:id/messages              member: like a direct conversation, GroupMessages
 POST /groups/:id/messages             member, not muted: same body as direct → 201 <GroupMessage>
+PATCH /groups/:id/messages/:messageId            your own message, not muted: like direct
+  messages, { "content" } → <GroupMessage>, 60 minutes after sending at most. Events (kind
+  other than "message") can't be edited (404). Members get group_message_edited.
 DELETE /groups/:id/messages/:messageId           your own message → 204
 PUT /groups/:id/messages/:messageId/reaction / DELETE   like direct messages
 POST /groups/:id/read                 → 204
@@ -525,9 +535,11 @@ GET /stream                           public or signed in
     messages_unread { "count" }   unread messages, sent on connect and on change
     message         <Message> sent or received
     message_deleted { "id" }
+    message_edited  <Message> with its new text
     message_reactions        { "id", "reactions" }
     group_message            <GroupMessage> (events included)
     group_message_deleted    { "group_id", "id" }
+    group_message_edited     <GroupMessage> with its new text
     group_message_reactions  { "group_id", "id", "reactions" }
     group_updated   { "id" }   renamed or members changed: GET /groups/:id again (404 =
                                you were removed)

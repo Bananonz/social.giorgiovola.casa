@@ -18,6 +18,8 @@
 		placement?: 'below' | 'above';
 		/** the textarea's height limit */
 		maxHeight?: string;
+		/** the textarea's look; the underlined .input by default */
+		inputClass?: string;
 		label?: string;
 		oninput?: () => void;
 		/** keys the suggestions don't take; replaces the default (Enter submits the form) */
@@ -34,6 +36,7 @@
 		source,
 		placement = 'below',
 		maxHeight = 'max-h-[40vh]',
+		inputClass = 'input',
 		label,
 		oninput,
 		onkeydown
@@ -147,7 +150,7 @@
 	<textarea
 		bind:this={input}
 		bind:value
-		class="input block {maxHeight} w-full resize-none overflow-y-auto wrap-anywhere"
+		class="{inputClass} block {maxHeight} w-full resize-none overflow-y-auto wrap-anywhere"
 		rows="1"
 		{name}
 		{required}

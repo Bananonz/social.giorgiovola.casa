@@ -4,6 +4,7 @@ import type { ChatMessage, ChatPeer, Conversation } from '#lib/types.js';
 import { linkedPosts } from './linkedPosts.js';
 import { unreadGroupCount } from './groups.js';
 import { withRepliesAndReactions } from './messageReactions.js';
+import { EDIT_INTERVAL, editable } from '#lib/messageEdits.js';
 
 const THREAD_PAGE = 30;
 const PREVIEW_LENGTH = 200;
@@ -98,6 +99,7 @@ type Row = {
 	images: string[];
 	reply_to_id: number | null;
 	created_at: Date;
+	edited_at: Date | null;
 };
 
 const toChatMessage = (row: Row, sender: string, recipient: string) => ({
@@ -107,7 +109,8 @@ const toChatMessage = (row: Row, sender: string, recipient: string) => ({
 	content: row.content,
 	images: row.images,
 	reply_to_id: row.reply_to_id,
-	created_at: row.created_at
+	created_at: row.created_at,
+	edited_at: row.edited_at
 });
 
 /** Fills `linked_post` (the post each message links to, if any), `reply_to` and `reactions`. */
@@ -128,7 +131,8 @@ export async function getThread(me: Party, peer: Party, before?: number | null) 
 			content: messages.content,
 			images: messages.images,
 			reply_to_id: messages.reply_to_id,
-			created_at: messages.created_at
+			created_at: messages.created_at,
+			edited_at: messages.edited_at
 		})
 		.from(messages)
 		.where(and(between(me.id, peer.id), before != null ? lt(messages.id, before) : undefined))
@@ -164,7 +168,8 @@ export async function getThreadFrom(me: Party, peer: Party, { afterId, limit }: 
 			content: messages.content,
 			images: messages.images,
 			reply_to_id: messages.reply_to_id,
-			created_at: messages.created_at
+			created_at: messages.created_at,
+			edited_at: messages.edited_at
 		})
 		.from(messages)
 		.where(and(between(me.id, peer.id), afterId !== null ? gt(messages.id, afterId) : undefined))
@@ -189,7 +194,8 @@ export async function getReceived(me: Party, { afterId, limit }: ListOptions) {
 			content: messages.content,
 			images: messages.images,
 			reply_to_id: messages.reply_to_id,
-			created_at: messages.created_at
+			created_at: messages.created_at,
+			edited_at: messages.edited_at
 		})
 		.from(messages)
 		.innerJoin(users, eq(users.id, messages.sender_id))
@@ -215,8 +221,59 @@ export async function sendMessage(
 		.values({ sender_id: me.id, recipient_id: peer.id, content, images, reply_to_id: replyTo })
 		.returning({ id: messages.id, created_at: messages.created_at });
 	const [message] = await complete([
-		toChatMessage({ ...row, content, images, reply_to_id: replyTo }, me.username, peer.username)
+		toChatMessage(
+			{ ...row, content, images, reply_to_id: replyTo, edited_at: null },
+			me.username,
+			peer.username
+		)
 	]);
+	return message;
+}
+
+const editedColumns = {
+	id: messages.id,
+	content: messages.content,
+	images: messages.images,
+	reply_to_id: messages.reply_to_id,
+	created_at: messages.created_at,
+	edited_at: messages.edited_at
+};
+
+/**
+ * Changes the text of a message `me` sent to `peer`, within the edit window. Returns the message,
+ * `gone` when there is no such message of theirs, `expired` past the window, or `empty` when it
+ * would leave a message with neither text nor images.
+ */
+export async function editMessage(
+	me: Party,
+	peer: Party,
+	id: number,
+	content: string
+): Promise<ChatMessage | 'gone' | 'expired' | 'empty'> {
+	const mineTo = and(
+		eq(messages.id, id),
+		eq(messages.sender_id, me.id),
+		eq(messages.recipient_id, peer.id)
+	);
+	const [found] = await db
+		.select({ content: messages.content, images: messages.images, created_at: messages.created_at })
+		.from(messages)
+		.where(mineTo);
+	if (!found) return 'gone';
+	if (!editable(found.created_at)) return 'expired';
+	if (!content && found.images.length === 0) return 'empty';
+	// the same text: nothing to mark as edited
+	const [row] =
+		content === found.content
+			? await db.select(editedColumns).from(messages).where(mineTo)
+			: await db
+					.update(messages)
+					.set({ content, edited_at: sql`NOW()` })
+					// the window is checked again, in case it closed in between
+					.where(and(mineTo, gt(messages.created_at, sql`NOW() - ${EDIT_INTERVAL}::interval`)))
+					.returning(editedColumns);
+	if (!row) return 'expired';
+	const [message] = await complete([toChatMessage(row, me.username, peer.username)]);
 	return message;
 }
 

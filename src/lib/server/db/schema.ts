@@ -266,6 +266,8 @@ export const messages = pgTable(
 			onDelete: 'set null'
 		}),
 		created_at: timestamptz('created_at').notNull().defaultNow(),
+		// the sender can change the text for an hour after sending
+		edited_at: timestamptz('edited_at'),
 		read_at: timestamptz('read_at')
 	},
 	(t) => [
@@ -345,7 +347,9 @@ export const group_messages = pgTable(
 		reply_to_id: integer('reply_to_id').references((): AnyPgColumn => group_messages.id, {
 			onDelete: 'set null'
 		}),
-		created_at: timestamptz('created_at').notNull().defaultNow()
+		created_at: timestamptz('created_at').notNull().defaultNow(),
+		// the sender can change the text for an hour after sending
+		edited_at: timestamptz('edited_at')
 	},
 	(t) => [
 		index('group_messages_group_id').on(t.group_id, t.id),

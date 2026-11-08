@@ -248,6 +248,16 @@ export async function publishMessageDeleted(id: number, senderId: number, recipi
 	}
 }
 
+/** A direct message's text was edited: only its two participants see the new one. */
+export function publishMessageEdited(message: ChatMessage, participants: [number, number]) {
+	sendTo(participants, 'message_edited', message);
+}
+
+/** A group message's text was edited: only the group's members see the new one. */
+export function publishGroupMessageEdited(message: GroupMessage, members: number[]) {
+	sendTo(members, 'group_message_edited', message);
+}
+
 /** The reactions to a direct message changed: only its two participants see them. */
 export function publishMessageReactions(
 	id: number,

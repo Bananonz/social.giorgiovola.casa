@@ -10,6 +10,7 @@ import type {
 } from '#lib/types.js';
 import { groupEventText } from '#lib/groupEvents.js';
 import { linkedPosts } from './linkedPosts.js';
+import { EDIT_INTERVAL, editable } from '#lib/messageEdits.js';
 import { withRepliesAndReactions } from './messageReactions.js';
 import { hit, isLimited } from './ratelimit.js';
 import { LIMITS, USERNAME_RE } from './validation.js';
@@ -347,6 +348,7 @@ function selectMessages(where: SQL | undefined) {
 			images: group_messages.images,
 			reply_to_id: group_messages.reply_to_id,
 			created_at: group_messages.created_at,
+			edited_at: group_messages.edited_at,
 			username: users.username,
 			name: users.name,
 			avatar: users.avatar,
@@ -381,6 +383,7 @@ async function toGroupMessages(rows: MessageRow[]): Promise<GroupMessage[]> {
 		content: r.content,
 		images: r.images,
 		created_at: r.created_at,
+		edited_at: r.edited_at,
 		linked_post: linked[i],
 		reply_to: extras[i].reply_to,
 		reactions: extras[i].reactions
@@ -438,6 +441,48 @@ export async function sendGroupMessage(
 		.returning({ id: group_messages.id });
 	const [message] = await loadMessages([row.id]);
 	return message;
+}
+
+/**
+ * Changes the text of a message `senderId` wrote in this group, within the edit window. Returns
+ * the message, `gone` when there is no such message of theirs (events included), `expired` past
+ * the window, or `empty` when it would leave a message with neither text nor images.
+ */
+export async function editGroupMessage(
+	groupId: number,
+	senderId: number,
+	id: number,
+	content: string
+): Promise<GroupMessage | 'gone' | 'expired' | 'empty'> {
+	const theirs = and(
+		eq(group_messages.id, id),
+		eq(group_messages.group_id, groupId),
+		eq(group_messages.sender_id, senderId),
+		eq(group_messages.kind, 'message')
+	);
+	const [found] = await db
+		.select({
+			content: group_messages.content,
+			images: group_messages.images,
+			created_at: group_messages.created_at
+		})
+		.from(group_messages)
+		.where(theirs);
+	if (!found) return 'gone';
+	if (!editable(found.created_at)) return 'expired';
+	if (!content && found.images.length === 0) return 'empty';
+	// the same text: nothing to mark as edited
+	if (content !== found.content) {
+		const updated = await db
+			.update(group_messages)
+			.set({ content, edited_at: sql`NOW()` })
+			// the window is checked again, in case it closed in between
+			.where(and(theirs, gt(group_messages.created_at, sql`NOW() - ${EDIT_INTERVAL}::interval`)))
+			.returning({ id: group_messages.id });
+		if (updated.length === 0) return 'expired';
+	}
+	const [message] = await loadMessages([id]);
+	return message ?? 'gone';
 }
 
 /** Deletes a message, only if `senderId` wrote it in this group. Events can't be deleted. */
