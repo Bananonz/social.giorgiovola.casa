@@ -23,6 +23,27 @@ To customize settings, copy `.env.example` to `.env` (docker compose picks it up
 
 Data lives in the `postgres-data`, `avatars` and `uploads` docker volumes (`uploads` holds the images attached to posts: up to 5 per post, 10MB each; PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, all re-encoded to WebP and scaled down to 2048px; avatars become 512px WebP squares). You should put the app behind a reverse proxy like [caddy](https://caddyserver.com/docs/quick-starts/caddyfile) or [nginx](https://gist.github.com/journeymanavi/dc7df599dd7618a12528c553ea47b1b1) to add at least https and gzip compression.
 
+## backups
+
+`scripts/backup.sh` backs up a docker deployment with [restic](https://restic.net) (0.17 or newer): a dump of the database (snapshot tagged `db`) and the `avatars` and `uploads` volumes (tagged `files`), then it drops old snapshots (7 daily, 4 weekly, 12 monthly by default) and reads back a small sample of the repository to catch damage early. The repository is created on the first run. Run it as root on the server, from the directory the app runs from:
+
+```
+cp scripts/backup.env.example /etc/social-backup.env   # set RESTIC_REPOSITORY and the password file
+chmod 600 /etc/social-backup.env
+openssl rand -base64 32 > /etc/social-backup.password && chmod 600 /etc/social-backup.password
+scripts/backup.sh
+```
+
+Keep a copy of the password somewhere other than the server: without it the backups can't be read. To run it every night, add a line to root's crontab (`crontab -e`):
+
+```
+30 3 * * * /opt/social/scripts/backup.sh >> /var/log/social-backup.log 2>&1
+```
+
+Set `HEALTHCHECK_URL` to get an alert from a service like [healthchecks.io](https://healthchecks.io) when a backup fails or stops running.
+
+`scripts/restore.sh` puts a backup back, replacing the current database, avatars and uploads (it asks first, and stops the app while restoring). By default it takes the latest snapshots; pass the ids from `restic snapshots` to pick older ones: `scripts/restore.sh <db snapshot> <files snapshot>`. On a new server, clone the repository, copy `.env` and `/etc/social-backup.env`, run `docker compose up -d` once to create the volumes, then `scripts/restore.sh`. Pending migrations are applied when the app starts again.
+
 ## regiorgios
 
 The arrows button under a post opens a menu with two ways to reshare it:
