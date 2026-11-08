@@ -85,6 +85,15 @@ export class Attachment {
 	discard() {
 		this.#xhr?.abort();
 		this.release();
+		this.unstage();
+	}
+
+	/**
+	 * Deletes the uploaded copy from the server but keeps the preview, before switching profile.
+	 * Sending afterwards gets a 410 and uploads it again. An upload still running is left alone:
+	 * the reload ends it, or it finishes if the switch fails.
+	 */
+	unstage() {
 		if (this.id) {
 			fetch(`/api/v1/uploads/${this.id}`, {
 				method: 'DELETE',

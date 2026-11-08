@@ -10,6 +10,7 @@
 	import UploadProgress from './UploadProgress.svelte';
 	import { Attachment, UploadError, uploadIds } from '#lib/attachment.svelte.js';
 	import { user } from '#lib/store.js';
+	import { onProfileSwitch, takeDraft, type ComposerDraft } from '#lib/composerDraft.js';
 	import { page } from '$app/state';
 
 	type Props = {
@@ -60,6 +61,14 @@
 	let dragDepth = 0;
 	let fileInput: HTMLInputElement | undefined = $state();
 	let errorTimeout: ReturnType<typeof setTimeout>;
+	/** submits still running, waited for before switching profile */
+	const inflight = new Set<Promise<void>>();
+
+	/** which composer a draft saved across a profile switch belongs to */
+	const draftKey = () =>
+		replyTo != null ? `reply:${replyTo}` : quoteOf ? `quote:${quoteOf.id}` : 'post';
+
+	const isEmpty = () => !content.trim() && attachments.length === 0 && !pollOptions;
 
 	function showError(message: string) {
 		error = message;
@@ -163,7 +172,34 @@
 		window.addEventListener('dragover', onDragOver);
 		window.addEventListener('dragleave', onDragLeave);
 		window.addEventListener('drop', onDrop);
+
+		let destroyed = false;
+		// written before a profile switch (which reloads the page): put it back
+		takeDraft(draftKey()).then((draft) => {
+			if (!draft || destroyed || !isEmpty()) return;
+			content = draft.content;
+			pollOptions = draft.pollOptions;
+			pollMinutes = draft.pollMinutes;
+			// uploaded again: the old uploads belonged to the other profile
+			addFiles(draft.files);
+		});
+		const unregister = onProfileSwitch(async (): Promise<ComposerDraft | null> => {
+			// a post on its way either lands or comes back to the form, rather than being cut off
+			await Promise.allSettled([...inflight]);
+			if (isEmpty()) return null;
+			for (const a of attachments) a.unstage();
+			return {
+				key: draftKey(),
+				content,
+				pollOptions: pollOptions && [...pollOptions],
+				pollMinutes,
+				files: attachments.map((a) => a.file)
+			};
+		});
+
 		return () => {
+			destroyed = true;
+			unregister();
 			window.removeEventListener('dragenter', onDragEnter);
 			window.removeEventListener('dragover', onDragOver);
 			window.removeEventListener('dragleave', onDragLeave);
@@ -238,7 +274,7 @@
 		const kept = draft.attachments.filter((a) => !a.failed);
 		for (const a of draft.attachments) if (a.failed) a.discard();
 		// give back what didn't go out, unless something new was started meanwhile
-		if (!content.trim() && attachments.length === 0 && !pollOptions) {
+		if (isEmpty()) {
 			content = draft.content;
 			attachments = kept;
 			pollOptions = draft.pollOptions;
@@ -269,7 +305,9 @@
 	class="mb-5 flex flex-col gap-2.5"
 	onsubmit={(e) => {
 		e.preventDefault();
-		submit();
+		const sending = submit();
+		inflight.add(sending);
+		sending.finally(() => inflight.delete(sending));
 	}}
 	onpaste={onPaste}
 >
