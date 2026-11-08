@@ -79,7 +79,7 @@
 	let fileInput = $state<HTMLInputElement>();
 	let content = $state('');
 	/** messages on their way to the server, shown at the bottom until they land */
-	let pending = $state<(Draft & { key: number; text: string; sentAt: number })[]>([]);
+	let pending = $state<(Draft & { key: number; text: string; sentAt: number; at: Date })[]>([]);
 	let pendingKey = 0;
 	// counts messages sent from here: replays the send button's paper plane flying off
 	let sends = $state(0);
@@ -172,8 +172,9 @@
 	/** a message starts a new day: it gets a separator above it */
 	const startsDay = (index: number) =>
 		index === 0 || dayKey(dateOf(messages[index])) !== dayKey(dateOf(messages[index - 1]));
-	const timeOf = (m: Message) =>
-		dateOf(m).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+	const clock = (d: Date) =>
+		d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+	const timeOf = (m: Message) => clock(dateOf(m));
 
 	/**
 	 * The message is the first of a run from the other side (in groups, from someone else): it
@@ -258,8 +259,13 @@
 
 	const myReaction = (m: Message) => m.reactions.find((r) => r.username === $user?.username);
 
-	const setReactions = (id: number, reactions: MessageReaction[]) =>
-		(messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m)));
+	/** Updates a message's reactions; reactions under the latest message keep it in view. */
+	async function setReactions(id: number, reactions: MessageReaction[]) {
+		const follow = isAtBottom();
+		messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m));
+		await tick();
+		if (follow) glideToBottom();
+	}
 
 	/** Sets your reaction to a message; picking the one you already have takes it back. */
 	async function react(message: Message, emoji: string) {
@@ -878,7 +884,7 @@
 		error = null;
 		resetTyping(typingTarget);
 		const key = pendingKey++;
-		pending = [...pending, { ...draft, key, text, sentAt: performance.now() }];
+		pending = [...pending, { ...draft, key, text, sentAt: performance.now(), at: new Date() }];
 		sends++;
 		outbox = outbox.then(() => post(draft, text, key));
 		await tick();
@@ -1200,8 +1206,11 @@
 					class="flex cursor-pointer items-center gap-2.5 rounded-[5px] p-[5px] text-left outline-none hover:bg-white/5 focus-visible:bg-white/5"
 					aria-label={`Remove your ${reaction.emoji}`}
 					onclick={() => {
+						// read before closing: `current` follows `reactors` and is gone once it's null
+						const message = current;
+						const emoji = reaction.emoji;
 						reactors = null;
-						react(current, reaction.emoji);
+						react(message, emoji);
 					}}
 				>
 					<Avatar user={reaction} size={32} clickable={false} />
@@ -1481,7 +1490,13 @@
 								</button>
 							{/if}
 							{#if message.images?.length}
-								<div class="grid gap-1.5 {message.images.length > 1 ? 'grid-cols-2' : ''}">
+								<!-- sized against the viewport, not the bubble: the bubble fits its content, and
+								     firefox shrinks an image sized in % of such a box to nearly nothing -->
+								<div
+									class="grid max-w-full gap-1.5 {message.images.length > 1
+										? 'w-[min(320px,60vw)] grid-cols-2'
+										: ''}"
+								>
 									{#each message.images as image, i}
 										<button
 											type="button"
@@ -1492,7 +1507,7 @@
 											<img
 												class={message.images.length > 1
 													? 'aspect-square w-full object-cover'
-													: 'max-h-[360px] max-w-full object-contain'}
+													: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}
 												src={image}
 												alt=""
 												loading="lazy"
@@ -1640,7 +1655,8 @@
 		{#each pending as draft, i (draft.key)}
 			{@const above = i > 0 || (messages.length > 0 && isMine(messages[messages.length - 1]))}
 			{@const below = i < pending.length - 1}
-			<!-- on its way: dimmed, with the loading mark where the time goes -->
+			<!-- on its way: dimmed, with the loading mark beside it. It shows the time it was sent at,
+				laid out like a sent message's, so the bubble keeps its size when the message lands -->
 			<div
 				class="send-in mr-2 flex max-w-[85%] flex-col items-end self-end opacity-70 {i === 0 &&
 				!above &&
@@ -1682,13 +1698,18 @@
 						</div>
 					{/if}
 					{#if draft.attachments.length}
-						<div class="grid gap-1.5 {draft.attachments.length > 1 ? 'grid-cols-2' : ''}">
+						<!-- sized like a sent message's images, see there -->
+						<div
+							class="grid max-w-full gap-1.5 {draft.attachments.length > 1
+								? 'w-[min(320px,60vw)] grid-cols-2'
+								: ''}"
+						>
 							{#each draft.attachments as attachment (attachment.url)}
 								<div class="relative {draft.attachments.length > 1 ? '' : 'w-fit'}">
 									<img
 										class="rounded-[5px] {draft.attachments.length > 1
 											? 'aspect-square w-full object-cover'
-											: 'max-h-[360px] max-w-full object-contain'}"
+											: 'max-h-[360px] max-w-[min(320px,60vw)] object-contain'}"
 										src={attachment.url}
 										alt=""
 										draggable="false"
@@ -1704,11 +1725,24 @@
 							{/each}
 						</div>
 					{/if}
-					{#if draft.text}
-						<p class="wrap-anywhere whitespace-pre-wrap">{draft.text}</p>
-					{/if}
-					<div class="flex justify-end">
+					<div class="absolute bottom-2 -left-6">
 						<LoadingScreen size={14} />
+					</div>
+					{#if draft.text}
+						<p class="wrap-anywhere whitespace-pre-wrap">
+							{draft.text}<span
+								aria-hidden="true"
+								class="invisible inline-flex gap-2 pl-2.5 text-[0.7rem] select-none"
+								>{clock(draft.at)}</span
+							>
+						</p>
+					{/if}
+					<div
+						class="flex items-center justify-end gap-2 text-[0.7rem] {draft.text
+							? 'absolute right-2.5 bottom-2'
+							: ''}"
+					>
+						<span class="opacity-60">{clock(draft.at)}</span>
 					</div>
 				</div>
 			</div>

@@ -16,12 +16,13 @@
 
 {#if (chat || index) && data.conversations && data.groups}
 	<!-- wide screens keep the list beside the open chat (or an empty one); narrow ones show only
-		the list on the index and only the chat in a chat -->
+		the list on the index and only the chat in a chat. The list reaches 10px past the column on
+		both sides (room for its rows' hover background), so alone it is 20px wider than the column -->
 	<div class="flex gap-5">
 		<aside
 			class="-ml-2.5 min-w-0 shrink-0 px-2.5 {chat
 				? 'hidden h-[calc(100dvh-120px)] w-85 overflow-y-auto overscroll-contain lg:block'
-				: 'w-full lg:h-[calc(100dvh-120px)] lg:w-85 lg:overflow-y-auto lg:overscroll-contain'}"
+				: 'w-[calc(100%+20px)] lg:h-[calc(100dvh-120px)] lg:w-85 lg:overflow-y-auto lg:overscroll-contain'}"
 		>
 			<ConversationList bind:this={list} conversations={data.conversations} groups={data.groups} />
 		</aside>
