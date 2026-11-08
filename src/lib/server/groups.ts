@@ -104,6 +104,19 @@ const unreadFor = (userId: number) =>
 		eq(group_messages.kind, 'message')
 	);
 
+/** The oldest group message still unread for `userId`, null when there is none. */
+export async function firstUnreadGroupMessage(groupId: number, userId: number) {
+	const [row] = await db
+		.select({ id: sql<number | null>`MIN(${group_messages.id})` })
+		.from(group_messages)
+		.innerJoin(
+			group_members,
+			and(eq(group_members.group_id, group_messages.group_id), eq(group_members.user_id, userId))
+		)
+		.where(and(eq(group_messages.group_id, groupId), unreadFor(userId)));
+	return row?.id ?? null;
+}
+
 export async function isGroupMuted(groupId: number, userId: number) {
 	const [row] = await db
 		.select({ muted: group_members.muted })

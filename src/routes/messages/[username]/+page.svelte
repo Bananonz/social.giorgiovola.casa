@@ -13,5 +13,6 @@
 		initialHasMore={data.thread.hasMore}
 		block={data.block}
 		muted={data.muted}
+		firstUnreadId={data.first_unread_id}
 	/>
 {/key}

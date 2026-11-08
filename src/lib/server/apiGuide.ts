@@ -202,7 +202,9 @@ GroupMessage (message or event of a group chat):
   replied or reacted to. "target" is who was added or removed; for "created" and
   "renamed" the content is the group's name.
 
-Group: { "id", "name", "owner": "alice" | null, "members": [User], "muted": false }
+Group: { "id", "name", "owner": "alice" | null, "members": [User], "muted": false,
+  "first_unread_id": 123 | null } (the oldest message from someone else you haven't read,
+  events aside; null when all is read)
   Members longest standing first. Any member can rename it and add people; only the owner
   removes others. When the owner leaves the longest standing member takes over; the last
   member to leave deletes the group.
@@ -437,7 +439,9 @@ GET /conversations                    signed in → { "direct": [..], "groups": 
 GET /share-targets                    signed in → { "recent": [ { "kind": "user", "peer":
   User } | { "kind": "group", "group": {...} } ], "groups": [...] } (to share a post)
 GET /conversations/:username          signed in → { "peer": User, "block": { "me": you
-  blocked them, "peer": they blocked you }, "muted": false }
+  blocked them, "peer": they blocked you }, "muted": false, "first_unread_id": 123 | null }
+  first_unread_id is the oldest message they sent you that you haven't read (null when all is
+  read): open the conversation there. Page back with ?cursor until it is loaded.
 GET /conversations/:username/messages signed in
   30 messages, OLDEST FIRST: the latest ones. For older history pass
   ?cursor=<next_cursor>; next_cursor is null when there is nothing older. Nothing is

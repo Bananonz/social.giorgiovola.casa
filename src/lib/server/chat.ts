@@ -8,6 +8,7 @@ import {
 	editGroupMessage,
 	getGroup,
 	getGroupConversations,
+	firstUnreadGroupMessage,
 	getGroupThread,
 	isGroupMuted,
 	manageLimited,
@@ -43,6 +44,7 @@ import {
 	deleteMessage,
 	editMessage,
 	findPeer,
+	firstUnreadMessage,
 	getBlock,
 	getConversations,
 	getThread,
@@ -142,12 +144,18 @@ async function peerOf(me: User, username: string) {
 /** A direct conversation: who it is with, blocks either way and whether you muted it. */
 export async function getConversation(me: User, username: string) {
 	const peer = await peerOf(me, username);
-	const [block, muted] = await Promise.all([getBlock(me.id, peer.id), isDmMuted(me.id, peer.id)]);
+	const [block, muted, firstUnread] = await Promise.all([
+		getBlock(me.id, peer.id),
+		isDmMuted(me.id, peer.id),
+		firstUnreadMessage(me.id, peer.id)
+	]);
 	return {
 		peer: { username: peer.username, name: peer.name, avatar: peer.avatar },
 		// `me`: you blocked them, `peer`: they blocked you
 		block,
-		muted
+		muted,
+		// where the reader left off: clients open the conversation there
+		first_unread_id: firstUnread
 	};
 }
 
@@ -305,7 +313,12 @@ export async function groupOf(me: Pick<User, 'id'>, id: number | null): Promise<
 /** A group's name, owner and members, and whether you muted it. */
 export async function getGroupInfo(me: User, id: number | null) {
 	const group = await groupOf(me, id);
-	return { ...toGroupChat(group), muted: await isGroupMuted(group.id, me.id) };
+	const [muted, firstUnread] = await Promise.all([
+		isGroupMuted(group.id, me.id),
+		firstUnreadGroupMessage(group.id, me.id)
+	]);
+	// first_unread_id: where the reader left off, clients open the chat there
+	return { ...toGroupChat(group), muted, first_unread_id: firstUnread };
 }
 
 /** Creates a group chat: `{ name, members: [username, …] }`; you become its owner. */

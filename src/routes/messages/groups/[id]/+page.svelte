@@ -26,5 +26,6 @@
 		initial={data.thread.messages}
 		initialHasMore={data.thread.hasMore}
 		muted={data.muted}
+		firstUnreadId={data.firstUnreadId}
 	/>
 {/key}
