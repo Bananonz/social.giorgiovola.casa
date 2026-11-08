@@ -55,6 +55,21 @@ export async function getSwitcher(locals: App.Locals): Promise<SwitcherAccount[]
 						AND group_messages.sender_id != users.id
 						AND group_messages.kind = 'message'
 						AND NOT group_members.muted)
+			)::int`,
+			// reactions others made to the profile's messages it hasn't seen yet
+			unread_reactions: sql<number>`(
+				(SELECT COUNT(*) FROM message_reactions
+					JOIN messages ON messages.id = message_reactions.message_id
+					WHERE messages.sender_id = users.id AND message_reactions.read_at IS NULL
+						AND NOT EXISTS (SELECT 1 FROM dm_mutes
+							WHERE dm_mutes.user_id = users.id AND dm_mutes.peer_id = messages.recipient_id))
+				+ (SELECT COUNT(*) FROM group_message_reactions
+					JOIN group_messages ON group_messages.id = group_message_reactions.message_id
+					JOIN group_members ON group_members.group_id = group_messages.group_id
+						AND group_members.user_id = users.id
+					WHERE group_messages.sender_id = users.id
+						AND group_message_reactions.read_at IS NULL
+						AND NOT group_members.muted)
 			)::int`
 		})
 		.from(users)
@@ -79,6 +94,7 @@ export async function getSwitcher(locals: App.Locals): Promise<SwitcherAccount[]
 		avatar: r.avatar,
 		unread: r.unread,
 		unreadMessages: r.unread_messages,
+		unreadReactions: r.unread_reactions,
 		active: r.id === locals.user?.id && accountId === locals.accountId,
 		sharedBy: r.owner_id !== null && r.owner_id !== accountId ? r.owner_username : null
 	});

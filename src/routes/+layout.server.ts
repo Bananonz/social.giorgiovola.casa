@@ -18,7 +18,8 @@ export const load = (async ({ fetch }) => {
 		muted: me?.muted ?? false,
 		muteReason: me?.mute_reason ?? null,
 		notisCount: me?.unread.notifications ?? 0,
-		messagesCount: me?.unread.messages ?? 0,
+		// reactions to your messages make a chat unread too
+		messagesCount: (me?.unread.messages ?? 0) + (me?.unread.reactions ?? 0),
 		accounts,
 		motd: instance.motd
 	};

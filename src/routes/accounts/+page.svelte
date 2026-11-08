@@ -144,7 +144,10 @@
 								{/if}
 							</span>
 						</div>
-						<UnreadBadges notifications={profile.unread} messages={profile.unreadMessages} />
+						<UnreadBadges
+							notifications={profile.unread}
+							messages={profile.unreadMessages + profile.unreadReactions}
+						/>
 						<div class="flex flex-wrap items-center justify-end gap-1.5">
 							{#if profile.active}
 								<span class="text-[0.8em] text-accent">in use</span>
@@ -268,7 +271,9 @@
 				{@const notifications =
 					account.unread + account.identities.reduce((n, i) => n + i.unread, 0)}
 				{@const messages =
-					account.unreadMessages + account.identities.reduce((n, i) => n + i.unreadMessages, 0)}
+					account.unreadMessages +
+					account.unreadReactions +
+					account.identities.reduce((n, i) => n + i.unreadMessages + i.unreadReactions, 0)}
 				<li class="{rowClass} border-line">
 					<div class="flex items-center gap-2.5">
 						<Avatar user={account} size={40} />

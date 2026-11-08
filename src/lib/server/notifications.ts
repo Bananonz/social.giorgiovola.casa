@@ -2,6 +2,7 @@ import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Notification } from '#lib/types.js';
 import { db, inbox } from './db/index.js';
 import { unreadMessageCount } from './messages.js';
+import { unreadReactionCount } from './messageReactions.js';
 import { pushUnread } from './realtime.js';
 
 /** A profile's notifications, newest first (`limit + 1` rows, see offsetPage). */
@@ -31,13 +32,14 @@ export async function listNotifications(userId: number, limit: number, offset: n
 	return rows as Notification[];
 }
 
-/** Unread notifications and unread messages (muted chats left out). */
+/** Unread notifications, messages and reactions to your messages (muted chats left out). */
 export async function unreadCounts(userId: number) {
-	const [notifications, messages] = await Promise.all([
+	const [notifications, messages, reactions] = await Promise.all([
 		db.$count(inbox, and(eq(inbox.user_id, userId), isNull(inbox.read_at))),
-		unreadMessageCount(userId)
+		unreadMessageCount(userId),
+		unreadReactionCount(userId)
 	]);
-	return { notifications, messages };
+	return { notifications, messages, reactions };
 }
 
 /** Marks one notification read. False when it isn't one of the profile's. */

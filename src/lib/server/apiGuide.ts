@@ -182,7 +182,7 @@ Me (GET /me):
               identities and bots), "bot", "identity", "created_at" },
     "account": { "id", "username" } | null,   // null for bots
     "role": "user" | "mod" | "admin", "muted", "mute_reason",
-    "unread": { "notifications": 2, "messages": 5 },
+    "unread": { "notifications": 2, "messages": 5, "reactions": 1 },
     "auth": "token" | "bot" | "cookie" }
 
 Message (direct message):
@@ -211,10 +211,17 @@ Group: { "id", "name", "owner": "alice" | null, "members": [User], "muted": fals
 
 Conversation (in GET /conversations):
   direct: { "peer": User, "preview", "mine" (you sent the last message), "created_at",
-            "unread": 2, "muted": false }
+            "unread": 2, "unread_reactions": 1, "reaction": "❤️" | null, "muted": false }
   group:  { "group": { "id", "name", "members": [first 3 others], "size" }, "preview",
             "event", "sender" (display name) | null, "mine", "created_at", "unread",
-            "muted" }
+            "unread_reactions", "reaction", "muted" }
+  Sorted by "created_at", newest first. A reaction counts as activity: when the latest one is
+  newer than the last message, "reaction" is its emoji, "created_at" its time, "mine" whether
+  you made it and "preview" its whole line ("Alice reacted ❤️ to “hi”"; groups also get
+  "event": true and "sender": who reacted). In groups only reactions you made or that are to
+  your messages count, not others reacting among themselves. Otherwise "reaction" is null.
+  "unread_reactions": reactions others made to your messages since you last read the chat.
+  They mark the chat unread but never move first_unread_id: open the chat as usual.
 
 ## Endpoints
 
@@ -283,7 +290,7 @@ POST /auth/tokens                                              account
 GET /auth/accounts                                             account
   The account (website: every account signed in on the browser; a token: its own account)
   with its identities:
-  { "items": [ { "id", "username", "name", "avatar", "unread", "unreadMessages",
+  { "items": [ { "id", "username", "name", "avatar", "unread", "unreadMessages", "unreadReactions",
   "active", "sharedBy": null, "identities": [ same fields, "sharedBy": "owner" | null ] } ] }
 POST /auth/switch                                              account
   { "username": "the account, or one of its identities, or one shared with it" }
@@ -428,8 +435,10 @@ GET /hashtags/:tag/posts              public, paginated Posts (replies included)
 ### Notifications
 
 GET /notifications                    signed in, paginated (default 50, at most 200)
-GET /notifications/unread             signed in → { "notifications": 2, "messages": 5 }
-  (messages: unread direct and group messages, muted chats left out)
+GET /notifications/unread             signed in → { "notifications": 2, "messages": 5,
+  "reactions": 1 }
+  (messages: unread direct and group messages; reactions: unread reactions others made to
+  your messages; muted chats left out of both. The website's messages badge shows the sum.)
 POST /notifications/read              marks all read → 204
 POST /notifications/:id/read          marks one read → 204
 
@@ -460,8 +469,12 @@ DELETE /conversations/:username/messages/:id   your own message → 204 (for bot
   isn't yours or isn't in the conversation with :username
 PUT /conversations/:username/messages/:id/reaction   { "emoji": "👍" } → { "reactions" }
 DELETE /conversations/:username/messages/:id/reaction → { "reactions" }
-  One reaction per profile per message; a new one replaces it. 60 a minute.
-POST /conversations/:username/read    marks what they sent you read → 204
+  One reaction per profile per message; a new one replaces it (choosing the same emoji again
+  changes nothing). 60 a minute. A reaction to their message is unread for them until they
+  read the conversation (see Conversation); reacting to your own message never is. No push
+  notification is sent for reactions.
+POST /conversations/:username/read    marks what they sent you, and their reactions to your
+  messages, read → 204
 PUT /conversations/:username/mute / DELETE   → { "muted" }: no push, not in the badge
 POST /conversations/:username/typing  → 204: shows "typing…" to them for a few seconds;
   send every 3-4 seconds while the user types. 40 a minute.
@@ -481,7 +494,7 @@ PATCH /groups/:id/messages/:messageId            your own message, not muted: li
   other than "message") can't be edited (404). Members get group_message_edited.
 DELETE /groups/:id/messages/:messageId           your own message → 204
 PUT /groups/:id/messages/:messageId/reaction / DELETE   like direct messages
-POST /groups/:id/read                 → 204
+POST /groups/:id/read                 → 204 (messages, and reactions to your messages)
 PUT /groups/:id/mute / DELETE         → { "muted" }
 POST /groups/:id/members   { "usernames": ["carla"] }   member → <Group>
 DELETE /groups/:id/members/:username  the owner removes someone, or anyone removes
@@ -536,7 +549,8 @@ GET /stream                           public or signed in
     poll            { "id": post id, "votes": [..] }
   Signed in, also (for the profile in use):
     notifications   { "count" }   unread notifications, sent on connect and on change
-    messages_unread { "count" }   unread messages, sent on connect and on change
+    messages_unread { "count", "reactions" }   unread messages, and unread reactions to your
+                    messages, sent on connect and on change
     message         <Message> sent or received
     message_deleted { "id" }
     message_edited  <Message> with its new text

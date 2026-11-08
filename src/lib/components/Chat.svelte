@@ -278,6 +278,9 @@
 		messages = messages.map((m) => (m.id === id ? { ...m, reactions } : m));
 		await tick();
 		if (follow) glideToBottom();
+		// a reaction to your message is unread until you see the chat, like a message
+		const message = messages.find((m) => m.id === id);
+		if (message && isMine(message)) markRead();
 	}
 
 	/** Sets your reaction to a message; picking the one you already have takes it back. */

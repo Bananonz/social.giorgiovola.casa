@@ -1,6 +1,7 @@
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import { db, follows, inbox, likes, posts, users } from './db/index.js';
 import { unreadMessageCount } from './messages';
+import { unreadReactionCount } from './messageReactions.js';
 import { getPosts } from './posts';
 import { sendFollowPush, sendGroupMessagePush, sendMessagePush, sendPush } from './push';
 import type { ChatMessage, GroupMessage, MessageReaction, Post } from '#lib/types.js';
@@ -179,7 +180,7 @@ async function sendUnreadCount(client: Client) {
 	if (client.userId === null) return;
 	try {
 		client.send(frame('notifications', { count: await unreadCount(client.userId) }));
-		client.send(frame('messages_unread', { count: await unreadMessageCount(client.userId) }));
+		client.send(frame('messages_unread', await messagesUnread(client.userId)));
 	} catch (e) {
 		console.error('realtime: unread count failed', e);
 	}
@@ -203,11 +204,20 @@ export async function pushUnread(userIds: Iterable<number | null>) {
 	}
 }
 
-/** Pushes the fresh unread message count to the connected streams of this user. */
+/** The `messages_unread` frame: unread messages, and unread reactions to the user's messages. */
+async function messagesUnread(userId: number) {
+	const [count, reactions] = await Promise.all([
+		unreadMessageCount(userId),
+		unreadReactionCount(userId)
+	]);
+	return { count, reactions };
+}
+
+/** Pushes the fresh unread message and reaction counts to the connected streams of this user. */
 export async function pushUnreadMessages(userId: number) {
 	const watching = [...clients].filter((c) => c.userId === userId);
 	if (watching.length === 0) return;
-	const chunk = frame('messages_unread', { count: await unreadMessageCount(userId) });
+	const chunk = frame('messages_unread', await messagesUnread(userId));
 	for (const client of watching) client.send(chunk);
 }
 

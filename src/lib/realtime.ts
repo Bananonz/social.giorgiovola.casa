@@ -22,7 +22,7 @@ export type RealtimeEvents = {
 	message_edited: ChatMessage;
 	/** the reactions to a direct message changed: all of them, oldest first */
 	message_reactions: { id: number; reactions: MessageReaction[] };
-	messages_unread: { count: number };
+	messages_unread: { count: number; reactions: number };
 	group_message: GroupMessage;
 	group_message_deleted: { group_id: number; id: number };
 	group_message_edited: GroupMessage;

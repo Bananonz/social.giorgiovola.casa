@@ -67,7 +67,7 @@ Changes to a group show up in its chat as a line of their own ("Alice added Bob"
 
 ## replies, reactions and mentions in chats
 
-In direct and group chats, swipe a message to the right to reply to it (like WhatsApp), or use the reply button that shows next to it on hover. The reply quotes the message it answers; tapping the quote jumps to it. Long press a message (or the smiley button on hover) for its menu: six quick reactions, reply, copy and delete. A double tap adds a ❤️. Everyone has one reaction per message, picking another replaces it and picking the same one again takes it back (or tap your own in the reactions list). Tapping the reactions under a message lists who reacted with what. Reactions update live and send no push.
+In direct and group chats, swipe a message to the right to reply to it (like WhatsApp), or use the reply button that shows next to it on hover. The reply quotes the message it answers; tapping the quote jumps to it. Long press a message (or the smiley button on hover) for its menu: six quick reactions, reply, copy and delete. A double tap adds a ❤️. Everyone has one reaction per message, picking another replaces it and picking the same one again takes it back (or tap your own in the reactions list). Tapping the reactions under a message lists who reacted with what. Reactions update live and send no push. A reaction to your message marks the chat unread (it counts in the messages badge, and the chat shows the emoji, or a dot, instead of a number) until you open it, but the chat still opens where your unread messages begin, not at the message that got the reaction. The latest reaction you made, or one to your message, also moves the chat to the top of the list with a line like "Alice reacted ❤️ to …".
 
 Typing `@` in a chat suggests people (the group's members in a group), and mentions link to the profile like in posts. In a group, a message that mentions you sends you a push even when you muted the group.
 
@@ -218,7 +218,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | `GET`            | `/api/v1/hashtags/:tag`                            | public    | a hashtag and its post count                          |
 | `GET`            | `/api/v1/hashtags/:tag/posts`                      | public    | posts with it                                         |
 | `GET`            | `/api/v1/notifications`                            | signed in | your notifications                                    |
-| `GET`            | `/api/v1/notifications/unread`                     | signed in | unread notifications and messages                     |
+| `GET`            | `/api/v1/notifications/unread`                     | signed in | unread notifications, messages and reactions          |
 | `POST`           | `/api/v1/notifications/read`                       | signed in | mark all read                                         |
 | `POST`           | `/api/v1/notifications/:id/read`                   | signed in | mark one read                                         |
 
@@ -226,13 +226,13 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 
 | method             | path                                                    | who                   |                                                                                       |
 | ------------------ | ------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------------------- |
-| `GET`              | `/api/v1/conversations`                                 | signed in             | direct conversations and groups                                                       |
+| `GET`              | `/api/v1/conversations`                                 | signed in             | direct conversations and groups, with unread messages and reactions                   |
 | `GET`              | `/api/v1/share-targets`                                 | signed in             | where a post can be shared                                                            |
 | `GET`              | `/api/v1/conversations/:username`                       | signed in             | peer, blocks, mute state and first unread message                                     |
 | `GET` / `POST`     | `/api/v1/conversations/:username/messages`              | signed in / not muted | messages, oldest first (`cursor` for older) / send `{ content, uploads?, reply_to? }` |
 | `PATCH` / `DELETE` | `/api/v1/conversations/:username/messages/:id`          | sender                | edit your message `{ content }` (within an hour) / delete it                          |
 | `PUT` / `DELETE`   | `/api/v1/conversations/:username/messages/:id/reaction` | signed in             | react `{ emoji }` / remove it                                                         |
-| `POST`             | `/api/v1/conversations/:username/read`                  | signed in             | mark read                                                                             |
+| `POST`             | `/api/v1/conversations/:username/read`                  | signed in             | mark messages and reactions to yours read                                             |
 | `PUT` / `DELETE`   | `/api/v1/conversations/:username/mute`                  | signed in             | mute / unmute                                                                         |
 | `POST`             | `/api/v1/conversations/:username/typing`                | signed in             | typing indicator                                                                      |
 | `GET` / `POST`     | `/api/v1/groups`                                        | signed in / not muted | your groups / create `{ name, members }`                                              |
@@ -240,7 +240,7 @@ Everything the web UI does is a documented JSON API under `/api/v1`, and the web
 | `GET` / `POST`     | `/api/v1/groups/:id/messages`                           | member                | messages and events / send                                                            |
 | `PATCH` / `DELETE` | `/api/v1/groups/:id/messages/:messageId`                | sender                | edit your message `{ content }` (within an hour) / delete it                          |
 | `PUT` / `DELETE`   | `/api/v1/groups/:id/messages/:messageId/reaction`       | member                | react / remove it                                                                     |
-| `POST`             | `/api/v1/groups/:id/read`                               | member                | mark read                                                                             |
+| `POST`             | `/api/v1/groups/:id/read`                               | member                | mark messages and reactions to yours read                                             |
 | `PUT` / `DELETE`   | `/api/v1/groups/:id/mute`                               | member                | mute / unmute                                                                         |
 | `POST`             | `/api/v1/groups/:id/members`                            | member                | add `{ usernames }`                                                                   |
 | `DELETE`           | `/api/v1/groups/:id/members/:username`                  | owner (or yourself)   | remove someone, or leave                                                              |

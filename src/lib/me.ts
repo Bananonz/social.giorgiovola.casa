@@ -18,7 +18,7 @@ export type Me = {
 	role: 'user' | 'mod' | 'admin';
 	muted: boolean;
 	mute_reason: string | null;
-	unread: { notifications: number; messages: number };
+	unread: { notifications: number; messages: number; reactions: number };
 	auth: 'cookie' | 'token' | 'bot';
 };
 

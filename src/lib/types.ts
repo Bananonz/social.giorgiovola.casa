@@ -17,6 +17,8 @@ export type SwitcherProfile = Pick<User, 'id' | 'name' | 'username' | 'avatar'> 
 	unread: number;
 	/** unread messages (direct and group), muted chats excluded */
 	unreadMessages: number;
+	/** unread reactions to the profile's messages, muted chats excluded */
+	unreadReactions: number;
 	active: boolean;
 	/** username of the account that shared this identity, null when it is not shared with you */
 	sharedBy: string | null;
@@ -192,6 +194,10 @@ export type Conversation = {
 	mine: boolean;
 	created_at: Date;
 	unread: number;
+	/** unread reactions to your messages; /api/v1 only */
+	unread_reactions?: number;
+	/** the emoji when the latest activity is a reaction (then `preview` describes it); /api/v1 only */
+	reaction?: string | null;
 };
 
 /** A group chat, as its members see it. */
@@ -253,6 +259,13 @@ export type GroupConversation = {
 	/** of the latest message, or of the group when nothing was sent yet */
 	created_at: Date;
 	unread: number;
+	/** unread reactions to your messages; /api/v1 only */
+	unread_reactions?: number;
+	/**
+	 * the emoji when the latest activity is a reaction you made or one to your message: then
+	 * `event` is true and `preview` is the whole line; /api/v1 only
+	 */
+	reaction?: string | null;
 	/** the viewer muted it: no push, and its unread messages stay out of the badge */
 	muted: boolean;
 };

@@ -232,6 +232,20 @@
       "when": 1794093725164,
       "tag": "0032_message_edits",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1794137885831,
+      "tag": "0033_reaction_read_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1794137895687,
+      "tag": "0034_reaction_read_backfill",
+      "breakpoints": true
     }
   ]
 }

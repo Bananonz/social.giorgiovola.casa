@@ -2,7 +2,7 @@ import type { RequestHandler } from './$types';
 import { botError, botHandler, botLimited, readBody } from '#lib/server/bots.js';
 import { getBlock } from '#lib/server/messages.js';
 import { directMessageParties, parseEmoji, setReaction } from '#lib/server/messageReactions.js';
-import { publishMessageReactions } from '#lib/server/realtime.js';
+import { publishMessageReactions, pushUnreadMessages } from '#lib/server/realtime.js';
 import { parseId } from '#lib/server/validation.js';
 
 const MAX_REACTIONS = 60;
@@ -27,8 +27,10 @@ const react = (remove: boolean): RequestHandler =>
 		if (botLimited(bot.user.id, 'reactions', MAX_REACTIONS))
 			return botError(429, 'Reacting too fast');
 
-		const reactions = await setReaction('direct', id, bot.user.id, emoji);
+		const { reactions } = await setReaction('direct', id, bot.user.id, emoji);
 		publishMessageReactions(id, reactions, [parties.sender_id, parties.recipient_id]);
+		// a reaction to the peer's message is unread for them
+		if (parties.sender_id !== bot.user.id) void pushUnreadMessages(parties.sender_id);
 		return Response.json({ reactions });
 	});
 

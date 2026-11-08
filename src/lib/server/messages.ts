@@ -3,7 +3,7 @@ import { db, blocks, dm_mutes, messages, users } from './db/index.js';
 import type { ChatMessage, ChatPeer, Conversation } from '#lib/types.js';
 import { linkedPosts } from './linkedPosts.js';
 import { unreadGroupCount } from './groups.js';
-import { withRepliesAndReactions } from './messageReactions.js';
+import { markDirectReactionsRead, withRepliesAndReactions } from './messageReactions.js';
 import { EDIT_INTERVAL, editable } from '#lib/messageEdits.js';
 
 const THREAD_PAGE = 30;
@@ -310,8 +310,19 @@ export async function firstUnreadMessage(userId: number, peerId: number) {
 	return row?.id ?? null;
 }
 
-/** Marks what `peerId` sent to `userId` as read; returns whether anything changed. */
+/**
+ * Marks what `peerId` sent to `userId` as read, and the reactions of `peerId` to what `userId`
+ * sent; returns whether anything changed.
+ */
 export async function markThreadRead(userId: number, peerId: number) {
+	const [updated, reactions] = await Promise.all([
+		markMessagesRead(userId, peerId),
+		markDirectReactionsRead(userId, peerId)
+	]);
+	return updated || reactions;
+}
+
+async function markMessagesRead(userId: number, peerId: number) {
 	const updated = await db
 		.update(messages)
 		.set({ read_at: sql`NOW()` })

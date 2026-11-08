@@ -36,9 +36,14 @@ import {
 import {
 	isDirectMessageBetween,
 	isGroupMessage,
+	latestDirectReactions,
+	latestGroupReactions,
 	parseEmoji,
 	reactionLimited,
-	setReaction
+	reactionPreview,
+	setReaction,
+	unreadReactionsByChat,
+	type LatestReaction
 } from './messageReactions.js';
 import {
 	deleteMessage,
@@ -92,17 +97,58 @@ const threadPage = <M extends { id: number }>({
 // ---------------------------------------------------------------------------------------------
 // direct conversations
 
-/** Every conversation of the profile: direct ones (with `muted`) and groups, latest first. */
+/** Whether a reaction is the latest thing that happened in a conversation last active at `at`. */
+const isLatest = (reaction: LatestReaction | undefined, at: Date): reaction is LatestReaction =>
+	!!reaction && new Date(reaction.created_at).getTime() > new Date(at).getTime();
+
+/**
+ * Every conversation of the profile: direct ones (with `muted`) and groups, latest first.
+ * Reactions count as activity: one newer than the latest message moves the conversation up and
+ * becomes its preview, and the unread ones to your messages are in `unread_reactions`.
+ */
 export async function listConversations(userId: number) {
-	const [direct, groups, muted] = await Promise.all([
+	const [direct, groups, muted, unreadReactions, directReactions] = await Promise.all([
 		getConversations(userId),
 		getGroupConversations(userId),
-		mutedPeers(userId)
+		mutedPeers(userId),
+		unreadReactionsByChat(userId),
+		latestDirectReactions(userId)
 	]);
+	const groupReactions = await latestGroupReactions(
+		userId,
+		groups.map((g) => g.group.id)
+	);
 	const mutedSet = new Set(muted);
 	return {
-		direct: direct.map((c) => ({ ...c, muted: mutedSet.has(c.peer.username) })),
-		groups
+		direct: direct.map((c) => {
+			const reaction = directReactions.get(c.peer.username);
+			const unread_reactions = unreadReactions.direct.get(c.peer.username) ?? 0;
+			const base = { ...c, muted: mutedSet.has(c.peer.username), unread_reactions };
+			if (!isLatest(reaction, c.created_at)) return { ...base, reaction: null };
+			return {
+				...base,
+				preview: reactionPreview(reaction, userId),
+				mine: reaction.user_id === userId,
+				created_at: reaction.created_at,
+				reaction: reaction.emoji
+			};
+		}),
+		groups: groups.map((g) => {
+			const reaction = groupReactions.get(g.group.id);
+			const unread_reactions = unreadReactions.groups.get(g.group.id) ?? 0;
+			if (!isLatest(reaction, g.created_at)) return { ...g, unread_reactions, reaction: null };
+			return {
+				...g,
+				unread_reactions,
+				// the whole line, like an event's
+				preview: reactionPreview(reaction, userId),
+				event: true,
+				sender: reaction.name,
+				mine: reaction.user_id === userId,
+				created_at: reaction.created_at,
+				reaction: reaction.emoji
+			};
+		})
 	};
 }
 
@@ -270,8 +316,10 @@ export async function reactDirect(me: User, username: string, id: number, rawEmo
 	const block = await getBlock(me.id, peer.id);
 	if (block.me || block.peer) fail(403, "You can't react in this conversation");
 	thrown(reactionLimited(me.id));
-	const reactions = await setReaction('direct', id, me.id, emoji);
+	const { reactions, senderId } = await setReaction('direct', id, me.id, emoji);
 	publishMessageReactions(id, reactions, [me.id, peer.id]);
+	// a reaction to the peer's message is unread for them
+	if (senderId !== null && senderId !== me.id) void pushUnreadMessages(senderId);
 	return { reactions };
 }
 
@@ -439,13 +487,15 @@ export async function reactInGroup(
 	// events (someone joined, left…) take no reactions
 	if (!(await isGroupMessage(group.id, messageId))) fail(404, 'Message not found');
 	thrown(reactionLimited(me.id));
-	const reactions = await setReaction('group', messageId, me.id, emoji);
+	const { reactions, senderId } = await setReaction('group', messageId, me.id, emoji);
 	publishGroupMessageReactions(
 		group.id,
 		messageId,
 		reactions,
 		group.members.map((m) => m.id)
 	);
+	// a reaction to someone else's message is unread for them
+	if (senderId !== null && senderId !== me.id) void pushUnreadMessages(senderId);
 	return { reactions };
 }
 

@@ -11,7 +11,7 @@ import type {
 import { groupEventText } from '#lib/groupEvents.js';
 import { linkedPosts } from './linkedPosts.js';
 import { EDIT_INTERVAL, editable } from '#lib/messageEdits.js';
-import { withRepliesAndReactions } from './messageReactions.js';
+import { markGroupReactionsRead, withRepliesAndReactions } from './messageReactions.js';
 import { hit, isLimited } from './ratelimit.js';
 import { LIMITS, USERNAME_RE } from './validation.js';
 
@@ -514,8 +514,19 @@ export async function deleteGroupMessage(groupId: number, senderId: number, id: 
 	return row ?? null;
 }
 
-/** Marks the whole group as read for this member; returns whether anything changed. */
+/**
+ * Marks the whole group as read for this member, with the reactions to their messages; returns
+ * whether anything changed.
+ */
 export async function markGroupRead(groupId: number, userId: number) {
+	const [updated, reactions] = await Promise.all([
+		markGroupMessagesRead(groupId, userId),
+		markGroupReactionsRead(groupId, userId)
+	]);
+	return updated || reactions;
+}
+
+async function markGroupMessagesRead(groupId: number, userId: number) {
 	const latest = sql`(SELECT COALESCE(MAX(${group_messages.id}), 0) FROM ${group_messages} WHERE ${group_messages.group_id} = ${groupId})`;
 	const updated = await db
 		.update(group_members)

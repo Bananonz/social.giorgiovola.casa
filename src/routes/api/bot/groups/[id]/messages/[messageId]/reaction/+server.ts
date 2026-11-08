@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { botError, botGroup, botHandler, botLimited, readBody } from '#lib/server/bots.js';
 import { isGroupMessage, parseEmoji, setReaction } from '#lib/server/messageReactions.js';
-import { publishGroupMessageReactions } from '#lib/server/realtime.js';
+import { publishGroupMessageReactions, pushUnreadMessages } from '#lib/server/realtime.js';
 import { parseId } from '#lib/server/validation.js';
 
 // the same bucket as reactions to direct messages
@@ -25,13 +25,15 @@ const react = (remove: boolean): RequestHandler =>
 		if (botLimited(bot.user.id, 'reactions', MAX_REACTIONS))
 			return botError(429, 'Reacting too fast');
 
-		const reactions = await setReaction('group', id, bot.user.id, emoji);
+		const { reactions, senderId } = await setReaction('group', id, bot.user.id, emoji);
 		publishGroupMessageReactions(
 			group.id,
 			id,
 			reactions,
 			group.members.map((m) => m.id)
 		);
+		// a reaction to someone else's message is unread for them
+		if (senderId !== null && senderId !== bot.user.id) void pushUnreadMessages(senderId);
 		return Response.json({ reactions });
 	});
 
