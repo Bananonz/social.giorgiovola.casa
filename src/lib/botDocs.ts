@@ -210,7 +210,7 @@ export const endpointGroups = (l: DocLimits): EndpointGroup[] => [
 				notes: [
 					'reply_to must be a message of this conversation (sent by either side), else 400.',
 					'403 when either side blocked the other, or the bot is muted.',
-					'20 messages a minute.'
+					'70 messages a minute.'
 				]
 			},
 			{
@@ -284,7 +284,7 @@ export const endpointGroups = (l: DocLimits): EndpointGroup[] => [
 				response: 'The new Group message, status 201.',
 				notes: [
 					'reply_to must be a message (not an event) of this group, else 400.',
-					'403 when the bot is muted. 20 messages a minute, direct and group together.'
+					'403 when the bot is muted. 70 messages a minute, direct and group together.'
 				]
 			},
 			{

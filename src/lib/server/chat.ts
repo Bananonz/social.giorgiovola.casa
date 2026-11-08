@@ -158,7 +158,7 @@ export async function conversationMessages(me: User, username: string, before: n
 }
 
 // the bot API's message limit and bucket (see botLimited), so bots can't get more by using v1
-const MAX_BOT_MESSAGES = 20;
+const MAX_BOT_MESSAGES = 70;
 
 /**
  * Reads a message body. Bots send text only, like in the bot API, and count against its
