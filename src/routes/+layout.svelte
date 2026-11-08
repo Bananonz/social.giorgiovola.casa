@@ -81,7 +81,10 @@
 	onMount(() => {
 		mounted = true;
 		const offNotifications = onRealtime('notifications', ({ count }) => ($notisCount = count));
-		const offMessages = onRealtime('messages_unread', ({ count }) => ($messagesCount = count));
+		const offMessages = onRealtime(
+			'messages_unread',
+			({ count, reactions }) => ($messagesCount = count + (reactions ?? 0))
+		);
 		return () => {
 			offNotifications();
 			offMessages();

@@ -364,6 +364,8 @@ export const group_messages = pgTable(
 );
 
 // Emoji reactions to messages: one per profile and message, changing it replaces the old one.
+// read_at: when the message's sender saw it. Unread reactions mark the chat unread without
+// touching where the chat reads from (messages.read_at / group_members.last_read_id).
 export const message_reactions = pgTable(
 	'message_reactions',
 	{
@@ -374,9 +376,15 @@ export const message_reactions = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: 'cascade' }),
 		emoji: text('emoji').notNull(),
-		created_at: timestamptz('created_at').notNull().defaultNow()
+		created_at: timestamptz('created_at').notNull().defaultNow(),
+		read_at: timestamptz('read_at')
 	},
-	(t) => [primaryKey({ columns: [t.message_id, t.user_id] })]
+	(t) => [
+		primaryKey({ columns: [t.message_id, t.user_id] }),
+		index('message_reactions_unread')
+			.on(t.message_id)
+			.where(sql`${t.read_at} IS NULL`)
+	]
 );
 
 export const group_message_reactions = pgTable(
@@ -389,9 +397,15 @@ export const group_message_reactions = pgTable(
 			.notNull()
 			.references(() => users.id, { onDelete: 'cascade' }),
 		emoji: text('emoji').notNull(),
-		created_at: timestamptz('created_at').notNull().defaultNow()
+		created_at: timestamptz('created_at').notNull().defaultNow(),
+		read_at: timestamptz('read_at')
 	},
-	(t) => [primaryKey({ columns: [t.message_id, t.user_id] })]
+	(t) => [
+		primaryKey({ columns: [t.message_id, t.user_id] }),
+		index('group_message_reactions_unread')
+			.on(t.message_id)
+			.where(sql`${t.read_at} IS NULL`)
+	]
 );
 
 // Direct conversations a profile muted: no push for what peer_id sends, and its unread messages

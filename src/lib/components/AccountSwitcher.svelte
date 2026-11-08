@@ -30,7 +30,7 @@
 		accounts()
 			.flatMap(profilesOf)
 			.filter((p) => !p.active)
-			.reduce((n, p) => n + p.unread + p.unreadMessages, 0);
+			.reduce((n, p) => n + p.unread + p.unreadMessages + p.unreadReactions, 0);
 
 	beforeNavigate(() => (open = false));
 
@@ -127,7 +127,7 @@
 										</span>
 										<UnreadBadges
 											notifications={profile.unread}
-											messages={profile.unreadMessages}
+											messages={profile.unreadMessages + profile.unreadReactions}
 										/>
 									</button>
 								{/if}

@@ -877,7 +877,7 @@ export const v1Groups: V1Group[] = [
 				method: 'GET',
 				path: '/api/v1/notifications/unread',
 				auth: 'signed in',
-				summary: 'unread notifications and messages'
+				summary: 'unread notifications, messages and reactions to your messages'
 			},
 			{
 				method: 'POST',
@@ -901,7 +901,8 @@ export const v1Groups: V1Group[] = [
 				method: 'GET',
 				path: '/api/v1/conversations',
 				auth: 'signed in',
-				summary: 'direct conversations and groups'
+				summary:
+					'direct conversations and groups, latest activity first (reactions included), with `unread` and `unread_reactions`'
 			},
 			{
 				method: 'GET',
@@ -938,7 +939,7 @@ export const v1Groups: V1Group[] = [
 				method: 'POST',
 				path: '/api/v1/conversations/:username/read',
 				auth: 'signed in',
-				summary: 'mark read'
+				summary: 'mark their messages, and their reactions to yours, read'
 			},
 			{
 				method: 'PUT / DELETE',
@@ -982,7 +983,12 @@ export const v1Groups: V1Group[] = [
 				auth: 'member',
 				summary: 'react / remove it'
 			},
-			{ method: 'POST', path: '/api/v1/groups/:id/read', auth: 'member', summary: 'mark read' },
+			{
+				method: 'POST',
+				path: '/api/v1/groups/:id/read',
+				auth: 'member',
+				summary: 'mark messages, and reactions to yours, read'
+			},
 			{
 				method: 'PUT / DELETE',
 				path: '/api/v1/groups/:id/mute',

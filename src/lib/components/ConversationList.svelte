@@ -88,6 +88,9 @@
 			onRealtime('message_deleted', refresh),
 			onRealtime('group_message', refresh),
 			onRealtime('group_message_deleted', refresh),
+			// a reaction moves its conversation up and becomes its preview
+			onRealtime('message_reactions', refresh),
+			onRealtime('group_message_reactions', refresh),
 			onRealtime('group_updated', refresh),
 			onRealtime('open', refresh)
 		];
@@ -200,7 +203,8 @@
 					{:else}
 						<p class="truncate text-[0.9em] text-muted">
 							{#if entry.kind === 'dm'}
-								{entry.mine ? 'You: ' : ''}{entry.preview}
+								<!-- a reaction's preview is its whole line -->
+								{entry.mine && !entry.reaction ? 'You: ' : ''}{entry.preview}
 							{:else if entry.sender === null}
 								No messages yet
 							{:else if entry.event}
@@ -238,6 +242,23 @@
 								? 'bg-muted'
 								: 'bg-accent'}">{entry.unread}</span
 						>
+					{:else if (entry.unread_reactions ?? 0) > 0}
+						<!-- only reactions are unread: the chat is marked, without a message count. The
+						     emoji shows when the preview is that reaction, a dot otherwise -->
+						{#if entry.reaction && !entry.mine}
+							<span
+								class="shrink-0 rounded-full px-[5px] text-[0.75em] {entry.muted
+									? 'bg-muted'
+									: 'bg-accent'}"
+								title="New reactions to your messages">{entry.reaction}</span
+							>
+						{:else}
+							<span
+								class="size-2.5 shrink-0 rounded-full {entry.muted ? 'bg-muted' : 'bg-accent'}"
+								title="New reactions to your messages"
+								><span class="sr-only">New reactions to your messages</span></span
+							>
+						{/if}
 					{/if}
 				</div>
 			</div>

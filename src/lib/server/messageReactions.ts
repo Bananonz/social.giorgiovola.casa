@@ -1,12 +1,15 @@
-import { and, asc, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
 	db,
+	dm_mutes,
+	group_members,
 	group_message_reactions,
 	group_messages,
 	message_reactions,
 	messages,
 	users
 } from './db/index.js';
+import { alias } from 'drizzle-orm/pg-core';
 import type { MessageReaction, MessageReplyTo } from '#lib/types.js';
 import { hit, isLimited } from './ratelimit.js';
 
@@ -14,6 +17,11 @@ import { hit, isLimited } from './ratelimit.js';
 
 const REPLY_PREVIEW_LENGTH = 200;
 const MAX_EMOJI_LENGTH = 16;
+// of the message a reaction is about, in the conversation list
+const REACTED_PREVIEW_LENGTH = 60;
+
+// the other side of a direct conversation
+const peerUser = alias(users, 'peer');
 
 // reacting, per profile, over direct and group messages together
 const REACT_WINDOW_MS = 60_000;
@@ -119,7 +127,10 @@ export async function withRepliesAndReactions<T extends { id: number; reply_to_i
 
 /**
  * Sets (or with a null emoji removes) this profile's reaction to a message, and returns the
- * message's reactions after the change.
+ * message's reactions after the change, with the id of the message's sender.
+ *
+ * A reaction is unread for the message's sender until they read the chat. It never moves where
+ * the chat reads from: a heart on an old message marks the chat unread, nothing more.
  */
 export async function setReaction(
 	thread: Thread,
@@ -128,19 +139,215 @@ export async function setReaction(
 	emoji: string | null
 ) {
 	const table = reactionsTableOf(thread);
+	const message = tableOf(thread);
+	const [found] = await db
+		.select({ sender_id: message.sender_id })
+		.from(message)
+		.where(eq(message.id, messageId));
+	const senderId = found?.sender_id ?? null;
 	if (emoji === null) {
 		await db.delete(table).where(and(eq(table.message_id, messageId), eq(table.user_id, userId)));
 	} else {
-		// a new emoji replaces the old one and moves to the end, like a fresh reaction
+		// reacting to your own message leaves nothing to read
+		const readAt = senderId === userId ? sql`NOW()` : null;
+		// a new emoji replaces the old one and moves to the end, like a fresh reaction, and is
+		// unread again; picking the same one again changes nothing
 		await db
 			.insert(table)
-			.values({ message_id: messageId, user_id: userId, emoji })
+			.values({ message_id: messageId, user_id: userId, emoji, read_at: readAt })
 			.onConflictDoUpdate({
 				target: [table.message_id, table.user_id],
-				set: { emoji, created_at: sql`NOW()` }
+				set: {
+					emoji,
+					created_at: sql`CASE WHEN ${table.emoji} = excluded.emoji THEN ${table.created_at} ELSE NOW() END`,
+					read_at: sql`CASE WHEN ${table.emoji} = excluded.emoji THEN ${table.read_at} ELSE excluded.read_at END`
+				}
 			});
 	}
-	return (await reactionsOf(thread, [messageId])).get(messageId) ?? [];
+	const reactions = (await reactionsOf(thread, [messageId])).get(messageId) ?? [];
+	return { reactions, senderId };
+}
+
+/** Marks the reactions to what `userId` sent `peerId` as read; returns whether anything changed. */
+export async function markDirectReactionsRead(userId: number, peerId: number) {
+	const updated = await db
+		.update(message_reactions)
+		.set({ read_at: sql`NOW()` })
+		.where(
+			and(
+				isNull(message_reactions.read_at),
+				inArray(
+					message_reactions.message_id,
+					db
+						.select({ id: messages.id })
+						.from(messages)
+						.where(and(eq(messages.sender_id, userId), eq(messages.recipient_id, peerId)))
+				)
+			)
+		)
+		.returning({ id: message_reactions.message_id });
+	return updated.length > 0;
+}
+
+/** Marks the reactions to what `userId` sent in this group as read; returns whether anything changed. */
+export async function markGroupReactionsRead(groupId: number, userId: number) {
+	const updated = await db
+		.update(group_message_reactions)
+		.set({ read_at: sql`NOW()` })
+		.where(
+			and(
+				isNull(group_message_reactions.read_at),
+				inArray(
+					group_message_reactions.message_id,
+					db
+						.select({ id: group_messages.id })
+						.from(group_messages)
+						.where(and(eq(group_messages.group_id, groupId), eq(group_messages.sender_id, userId)))
+				)
+			)
+		)
+		.returning({ id: group_message_reactions.message_id });
+	return updated.length > 0;
+}
+
+/** Unread reactions to the messages of `userId`, by peer username (direct) and by group id. */
+export async function unreadReactionsByChat(userId: number) {
+	const [direct, groups] = await Promise.all([
+		db
+			.select({ peer: peerUser.username, count: sql<number>`COUNT(*)::int` })
+			.from(message_reactions)
+			.innerJoin(messages, eq(messages.id, message_reactions.message_id))
+			.innerJoin(peerUser, eq(peerUser.id, messages.recipient_id))
+			.where(and(eq(messages.sender_id, userId), isNull(message_reactions.read_at)))
+			.groupBy(peerUser.username),
+		db
+			.select({ group_id: group_messages.group_id, count: sql<number>`COUNT(*)::int` })
+			.from(group_message_reactions)
+			.innerJoin(group_messages, eq(group_messages.id, group_message_reactions.message_id))
+			// only groups the sender is still in
+			.innerJoin(
+				group_members,
+				and(eq(group_members.group_id, group_messages.group_id), eq(group_members.user_id, userId))
+			)
+			.where(and(eq(group_messages.sender_id, userId), isNull(group_message_reactions.read_at)))
+			.groupBy(group_messages.group_id)
+	]);
+	return {
+		direct: new Map(direct.map((r) => [r.peer, r.count])),
+		groups: new Map(groups.map((r) => [r.group_id, r.count]))
+	};
+}
+
+/** Unread reactions to the messages of `userId`, muted chats aside: part of the messages badge. */
+export async function unreadReactionCount(userId: number) {
+	const [direct, groups] = await Promise.all([
+		db
+			.select({ count: sql<number>`COUNT(*)::int` })
+			.from(message_reactions)
+			.innerJoin(messages, eq(messages.id, message_reactions.message_id))
+			.where(
+				and(
+					eq(messages.sender_id, userId),
+					isNull(message_reactions.read_at),
+					sql`NOT EXISTS (SELECT 1 FROM ${dm_mutes} WHERE ${dm_mutes.user_id} = ${userId} AND ${dm_mutes.peer_id} = ${messages.recipient_id})`
+				)
+			),
+		db
+			.select({ count: sql<number>`COUNT(*)::int` })
+			.from(group_message_reactions)
+			.innerJoin(group_messages, eq(group_messages.id, group_message_reactions.message_id))
+			.innerJoin(
+				group_members,
+				and(eq(group_members.group_id, group_messages.group_id), eq(group_members.user_id, userId))
+			)
+			.where(
+				and(
+					eq(group_messages.sender_id, userId),
+					isNull(group_message_reactions.read_at),
+					eq(group_members.muted, false)
+				)
+			)
+	]);
+	return (direct[0]?.count ?? 0) + (groups[0]?.count ?? 0);
+}
+
+/** The latest reaction of a conversation, as the conversation list shows it. */
+export type LatestReaction = {
+	emoji: string;
+	/** the profile that reacted */
+	user_id: number;
+	name: string;
+	/** the message reacted to, clipped */
+	content: string;
+	images: number;
+	created_at: Date;
+};
+
+/** The latest reaction of each direct conversation of `userId`, by peer username. */
+export async function latestDirectReactions(userId: number) {
+	const peer = sql<number>`CASE WHEN ${messages.sender_id} = ${userId} THEN ${messages.recipient_id} ELSE ${messages.sender_id} END`;
+	// the pair of participants: DISTINCT ON and ORDER BY must be the same expression, which the
+	// CASE above isn't once its parameter is bound twice
+	const low = sql`LEAST(${messages.sender_id}, ${messages.recipient_id})`;
+	const high = sql`GREATEST(${messages.sender_id}, ${messages.recipient_id})`;
+	const rows = await db
+		.selectDistinctOn([low, high], {
+			peer: peerUser.username,
+			emoji: message_reactions.emoji,
+			user_id: message_reactions.user_id,
+			name: users.name,
+			content: sql<string>`LEFT(${messages.content}, ${REACTED_PREVIEW_LENGTH})`,
+			images: sql<number>`CARDINALITY(${messages.images})::int`,
+			created_at: message_reactions.created_at
+		})
+		.from(message_reactions)
+		.innerJoin(messages, eq(messages.id, message_reactions.message_id))
+		.innerJoin(users, eq(users.id, message_reactions.user_id))
+		.innerJoin(peerUser, eq(peerUser.id, peer))
+		.where(or(eq(messages.sender_id, userId), eq(messages.recipient_id, userId)))
+		.orderBy(low, high, desc(message_reactions.created_at));
+	return new Map(rows.map(({ peer, ...r }): [string, LatestReaction] => [peer, r]));
+}
+
+/**
+ * The latest reaction of each of these groups that concerns `userId`, by group id: one they made,
+ * or one to their message. Others reacting among themselves don't reshuffle everyone's list.
+ */
+export async function latestGroupReactions(userId: number, groupIds: number[]) {
+	if (groupIds.length === 0) return new Map<number, LatestReaction>();
+	const rows = await db
+		.selectDistinctOn([group_messages.group_id], {
+			group_id: group_messages.group_id,
+			emoji: group_message_reactions.emoji,
+			user_id: group_message_reactions.user_id,
+			name: users.name,
+			content: sql<string>`LEFT(${group_messages.content}, ${REACTED_PREVIEW_LENGTH})`,
+			images: sql<number>`CARDINALITY(${group_messages.images})::int`,
+			created_at: group_message_reactions.created_at
+		})
+		.from(group_message_reactions)
+		.innerJoin(group_messages, eq(group_messages.id, group_message_reactions.message_id))
+		.innerJoin(users, eq(users.id, group_message_reactions.user_id))
+		.where(
+			and(
+				inArray(group_messages.group_id, groupIds),
+				or(eq(group_message_reactions.user_id, userId), eq(group_messages.sender_id, userId))
+			)
+		)
+		.orderBy(group_messages.group_id, desc(group_message_reactions.created_at));
+	return new Map(rows.map(({ group_id, ...r }): [number, LatestReaction] => [group_id, r]));
+}
+
+/** The line the conversation list shows for a reaction: `Alice reacted ❤️ to “hi”`. */
+export function reactionPreview(reaction: LatestReaction, userId: number) {
+	const who = reaction.user_id === userId ? 'You' : reaction.name;
+	const clipped = reaction.content.length >= REACTED_PREVIEW_LENGTH ? '…' : '';
+	const what = reaction.content
+		? `“${reaction.content}${clipped}”`
+		: reaction.images > 0
+		? 'a photo'
+		: 'a message';
+	return `${who} reacted ${reaction.emoji} to ${what}`;
 }
 
 /** The two participants of a direct message, if `userId` is one of them. */
