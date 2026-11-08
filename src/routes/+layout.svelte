@@ -61,6 +61,23 @@
 		else navigator.clearAppBadge().catch(() => {});
 	}
 
+	// unread count in the tab title too. pages set their own <title> (Svelte writes
+	// document.title), so the prefix is re-applied whenever the title changes
+	const titleCount = /^\(\d+\+?\) /;
+	const applyTitleCount = (count: number) => {
+		const base = document.title.replace(titleCount, '');
+		const title = count > 0 ? `(${count > 99 ? '99+' : count}) ${base}` : base;
+		// guard: setting the title fires the observer below again
+		if (document.title !== title) document.title = title;
+	};
+	$: if (mounted) applyTitleCount($notisCount + $messagesCount);
+
+	onMount(() => {
+		const titleObserver = new MutationObserver(() => applyTitleCount($notisCount + $messagesCount));
+		titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+		return () => titleObserver.disconnect();
+	});
+
 	onMount(() => {
 		mounted = true;
 		const offNotifications = onRealtime('notifications', ({ count }) => ($notisCount = count));
